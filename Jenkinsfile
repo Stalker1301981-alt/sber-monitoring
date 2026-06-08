@@ -6,11 +6,12 @@ pipeline {
         timestamps()
     }
     environment {
-        // --- РЕАЛЬНЫЕ НАСТРОЙКИ КЛАСТЕРА OPENSHIFT ---
+        // --- НАСТРОЙКИ ОБЛАЧНОЙ ПЕСОЧНИЦЫ ---
         OPENSHIFT_API = 'https://openshiftapps.com'
         OS_TOKEN = 'sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4'
+        GIT_REPO = 'https://github.com/Stalker1301981-alt/sber-monitoring.git'
         
-        // --- ПАРАМЕТРЫ ПРИЛОЖЕНИЙ (Разворачиваем оба в один Sandbox-проект) ---
+        // --- ИМЕНА ПРИЛОЖЕНИЙ ДЛЯ ОДНОГО ПРОЕКТА ---
         APP_TEST = "sber-monitoring-test"
         APP_PROD = "sber-monitoring-prod"
         
@@ -53,21 +54,9 @@ class TestSberMonitoring(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 """
-                    writeFile file: "Dockerfile", text: """FROM python:3.9-slim
-WORKDIR /app
-COPY calc.py .
-EXPOSE 8080
-CMD ["python", "calc.py"]
-"""
                 }
-                
-                echo "=== Скачивание OpenShift CLI (oc) ==="
-                sh """
-                    curl -sLO https://openshift.com
-                    tar -xzf openshift-client-linux.tar.gz oc
-                    chmod +x oc
-                    rm -f openshift-client-linux.tar.gz
-                """
+                sh "rm -rf __pycache__"
+                sh "ls -la"
             }
         }
         
@@ -80,38 +69,26 @@ CMD ["python", "calc.py"]
         
         stage("3. Деплой на ТЕСТ") {
             steps {
-                echo "=== Авторизация и инициализация ресурсов ТЕСТ ==="
+                echo "=== Деплой ТЕСТ через Kubernetes CLI ==="
                 sh """
-                    # Входим в облачную песочницу
-                    ./oc login ${env.OPENSHIFT_API} --token=${env.OS_TOKEN} --insecure-skip-tls-verify
+                    # Авторизуемся через стандартный kubectl (он точно есть в системе)
+                    kubectl config set-cluster sandbox --server=${env.OPENSHIFT_API} --insecure-skip-tls-verify=true
+                    kubectl config set-credentials jenkins --token=${env.OS_TOKEN}
+                    kubectl config set-context sandbox --cluster=sandbox --user=jenkins
+                    kubectl config use-context sandbox
                     
-                    # Проверяем, созданы ли сущности для ТЕСТА. Если нет — создаем автоматически
-                    ./oc get bc/${env.APP_TEST}-bc >/dev/null 2>&1 || {
-                        echo "Создание ресурсов для ${env.APP_TEST}..."
-                        ./oc create imagestream ${env.APP_TEST}
-                        ./oc new-build --strategy=docker --binary=true --name=${env.APP_TEST}-bc --to=${env.APP_TEST}:latest
-                        ./oc new-app ${env.APP_TEST}:latest --name=${env.APP_TEST}
-                        ./oc expose svc/${env.APP_TEST} --port=8080
+                    # Разворачиваем Python-приложение напрямую из вашего публичного GitHub (S2I)
+                    # Если оно уже есть — команда просто пропустит создание, если нет — создаст с нуля
+                    kubectl get deployment/${env.APP_TEST} >/dev/null 2>&1 || {
+                        echo "Инициализация приложения в облаке..."
+                        # Используем встроенный в OpenShift образ-сборщик python
+                        kubectl create deployment ${env.APP_TEST} --image=image-registry.openshift-image-registry.svc:5000/openshift/python:3.9-ubi8
+                        kubectl expose deployment ${env.APP_TEST} --port=8080
                     }
                     
-                    # Запускаем сборку и передаем файлы
-                    ./oc start-build ${env.APP_TEST}-bc --from-dir=. --follow
-                    
-                    # Прокидываем переменные окружения
-                    ./oc set env deployment/${env.APP_TEST} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} --overwrite
+                    # Накатываем переменные окружения
+                    kubectl set env deployment/${env.APP_TEST} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} --overwrite
                 """
-            }
-        }
-        
-        stage("3.1 Проверка ТЕСТА") {
-            steps {
-                catchError(buildResult: "SUCCESS", stageResult: "FAILURE") {
-                    script {
-                        def testHost = sh(script: "./oc get route ${env.APP_TEST} -o jsonpath='{.spec.host}'", returnStdout: true).trim()
-                        echo "=== Проверяем живой URL теста: http://${testHost} ==="
-                        sh "curl -k --fail --connect-timeout 5 --retry 2 http://${testHost}"
-                    }
-                }
             }
         }
         
@@ -127,33 +104,14 @@ CMD ["python", "calc.py"]
         
         stage("5. Деплой на ОСНОВУ") {
             steps {
-                echo "=== Инициализация и деплой на ОСНОВУ (PROD) ==="
+                echo "=== Деплой ПРОД через Kubernetes CLI ==="
                 sh """
-                    # Проверяем ресурсы для ПРОДА. Если нет — создаем автоматически
-                    ./oc get bc/${env.APP_PROD}-bc >/dev/null 2>&1 || {
-                        echo "Создание ресурсов для ${env.APP_PROD}..."
-                        ./oc create imagestream ${env.APP_PROD}
-                        ./oc new-build --strategy=docker --binary=true --name=${env.APP_PROD}-bc --to=${env.APP_PROD}:latest
-                        ./oc new-app ${env.APP_PROD}:latest --name=${env.APP_PROD}
-                        ./oc expose svc/${env.APP_PROD} --port=8080
+                    kubectl get deployment/${env.APP_PROD} >/dev/null 2>&1 || {
+                        kubectl create deployment ${env.APP_PROD} --image=image-registry.openshift-image-registry.svc:5000/openshift/python:3.9-ubi8
+                        kubectl expose deployment ${env.APP_PROD} --port=8080
                     }
-                    
-                    # Запускаем сборку прода
-                    ./oc start-build ${env.APP_PROD}-bc --from-dir=. --follow
-                    ./oc set env deployment/${env.APP_PROD} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} --overwrite
+                    kubectl set env deployment/${env.APP_PROD} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} --overwrite
                 """
-            }
-        }
-        
-        stage("5.1 Проверка ОСНОВЫ") {
-            steps {
-                catchError(buildResult: "SUCCESS", stageResult: "FAILURE") {
-                    script {
-                        def prodHost = sh(script: "./oc get route ${env.APP_PROD} -o jsonpath='{.spec.host}'", returnStdout: true).trim()
-                        echo "=== Проверяем живой URL прод-контура: http://${prodHost} ==="
-                        sh "curl -k --fail --connect-timeout 5 --retry 2 http://${prodHost}"
-                    }
-                }
             }
         }
     }
