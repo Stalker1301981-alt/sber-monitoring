@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sber-monitoring
+  namespace: kovaliov2700-dev # Явно указываем целевой проект
   labels:
     app: sber-monitoring
 spec:
@@ -19,3 +20,31 @@ spec:
         image: k3d-sber-registry:5000/sber-monitoring:latest
         ports:
         - containerPort: 3000
+        imagePullPolicy: IfNotPresent
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sber-monitoring
+  namespace: kovaliov2700-dev
+spec:
+  selector:
+    app: sber-monitoring # Идеально совпадает с селектором Deployment
+  ports:
+  - name: http
+    port: 3000       # Внутренний порт сервиса
+    targetPort: 3000 # Ведёт на порт 3000 вашего приложения
+  type: ClusterIP    # Стандартный внутренний IP для OpenShift
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: sber-monitoring
+  namespace: kovaliov2700-dev
+spec:
+  to:
+    kind: Service
+    name: sber-monitoring # Перенаправляет трафик на сервис выше
+    weight: 100
+  port:
+    targetPort: http # Название порта из секции Service.ports
