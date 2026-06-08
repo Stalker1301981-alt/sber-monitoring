@@ -8,15 +8,12 @@ pipeline {
     environment {
         // --- РЕАЛЬНЫЕ НАСТРОЙКИ КЛАСТЕРА OPENSHIFT ---
         OPENSHIFT_API = 'https://openshiftapps.com'
-        // Прописываем токен напрямую строкой вместо ID секретки
         OS_TOKEN = 'sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4'
         
-        // --- НАСТРОЙКИ ПРОЕКТОВ (ПРОСТРАНСТВ ИМЕН) ---
-        PROJECT_TEST = "sber-monitoring-test"
-        PROJECT_PROD = "sber-monitoring-prod"
+        // --- ПАРАМЕТРЫ ПРИЛОЖЕНИЙ (Разворачиваем оба в один Sandbox-проект) ---
+        APP_TEST = "sber-monitoring-test"
+        APP_PROD = "sber-monitoring-prod"
         
-        // --- ПАРАМЕТРЫ ПРИЛОЖЕНИЯ ---
-        APP_NAME = "sber-monitoring"
         APP_VERSION = "2.0"
         DRUID_HOST = "druid-broker.infra.svc.cluster.local"
         DRUID_PORT = "8082"
@@ -63,8 +60,14 @@ EXPOSE 8080
 CMD ["python", "calc.py"]
 """
                 }
-                sh "rm -rf __pycache__"
-                sh "ls -la"
+                
+                echo "=== Скачивание OpenShift CLI (oc) ==="
+                sh """
+                    curl -sLO https://openshift.com
+                    tar -xzf openshift-client-linux.tar.gz oc
+                    chmod +x oc
+                    rm -f openshift-client-linux.tar.gz
+                """
             }
         }
         
@@ -77,18 +80,25 @@ CMD ["python", "calc.py"]
         
         stage("3. Деплой на ТЕСТ") {
             steps {
-                echo "=== Деплой: ${env.APP_NAME} в тестовый проект ${env.PROJECT_TEST} ==="
-                // Блок withCredentials удален, переменная OS_TOKEN берется напрямую из environment
+                echo "=== Авторизация и инициализация ресурсов ТЕСТ ==="
                 sh """
-                    # Логин в кластер с использованием явного токена
-                    oc login ${env.OPENSHIFT_API} --token=${env.OS_TOKEN} --insecure-skip-tls-verify
-                    oc project ${env.PROJECT_TEST}
+                    # Входим в облачную песочницу
+                    ./oc login ${env.OPENSHIFT_API} --token=${env.OS_TOKEN} --insecure-skip-tls-verify
                     
-                    # Отправка сгенерированного кода в BuildConfig OpenShift
-                    oc start-build ${env.APP_NAME}-bc --from-dir=. --follow
+                    # Проверяем, созданы ли сущности для ТЕСТА. Если нет — создаем автоматически
+                    ./oc get bc/${env.APP_TEST}-bc >/dev/null 2>&1 || {
+                        echo "Создание ресурсов для ${env.APP_TEST}..."
+                        ./oc create imagestream ${env.APP_TEST}
+                        ./oc new-build --strategy=docker --binary=true --name=${env.APP_TEST}-bc --to=${env.APP_TEST}:latest
+                        ./oc new-app ${env.APP_TEST}:latest --name=${env.APP_TEST}
+                        ./oc expose svc/${env.APP_TEST} --port=8080
+                    }
+                    
+                    # Запускаем сборку и передаем файлы
+                    ./oc start-build ${env.APP_TEST}-bc --from-dir=. --follow
                     
                     # Прокидываем переменные окружения
-                    oc set env deployment/${env.APP_NAME} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} --overwrite
+                    ./oc set env deployment/${env.APP_TEST} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} --overwrite
                 """
             }
         }
@@ -97,10 +107,8 @@ CMD ["python", "calc.py"]
             steps {
                 catchError(buildResult: "SUCCESS", stageResult: "FAILURE") {
                     script {
-                        sh "oc login ${env.OPENSHIFT_API} --token=${env.OS_TOKEN} --insecure-skip-tls-verify"
-                        def testHost = sh(script: "oc get route ${env.APP_NAME} -n ${env.PROJECT_TEST} -o jsonpath='{.spec.host}'", returnStdout: true).trim()
+                        def testHost = sh(script: "./oc get route ${env.APP_TEST} -o jsonpath='{.spec.host}'", returnStdout: true).trim()
                         echo "=== Проверяем живой URL теста: http://${testHost} ==="
-                        
                         sh "curl -k --fail --connect-timeout 5 --retry 2 http://${testHost}"
                     }
                 }
@@ -119,13 +127,20 @@ CMD ["python", "calc.py"]
         
         stage("5. Деплой на ОСНОВУ") {
             steps {
-                echo "=== Деплой: ${env.APP_NAME} на ОСНОВУ (PROD) в проект ${env.PROJECT_PROD} ==="
+                echo "=== Инициализация и деплой на ОСНОВУ (PROD) ==="
                 sh """
-                    oc login ${env.OPENSHIFT_API} --token=${env.OS_TOKEN} --insecure-skip-tls-verify
-                    oc project ${env.PROJECT_PROD}
+                    # Проверяем ресурсы для ПРОДА. Если нет — создаем автоматически
+                    ./oc get bc/${env.APP_PROD}-bc >/dev/null 2>&1 || {
+                        echo "Создание ресурсов для ${env.APP_PROD}..."
+                        ./oc create imagestream ${env.APP_PROD}
+                        ./oc new-build --strategy=docker --binary=true --name=${env.APP_PROD}-bc --to=${env.APP_PROD}:latest
+                        ./oc new-app ${env.APP_PROD}:latest --name=${env.APP_PROD}
+                        ./oc expose svc/${env.APP_PROD} --port=8080
+                    }
                     
-                    oc start-build ${env.APP_NAME}-bc --from-dir=. --follow
-                    oc set env deployment/${env.APP_NAME} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} --overwrite
+                    # Запускаем сборку прода
+                    ./oc start-build ${env.APP_PROD}-bc --from-dir=. --follow
+                    ./oc set env deployment/${env.APP_PROD} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} --overwrite
                 """
             }
         }
@@ -134,10 +149,8 @@ CMD ["python", "calc.py"]
             steps {
                 catchError(buildResult: "SUCCESS", stageResult: "FAILURE") {
                     script {
-                        sh "oc login ${env.OPENSHIFT_API} --token=${env.OS_TOKEN} --insecure-skip-tls-verify"
-                        def prodHost = sh(script: "oc get route ${env.APP_NAME} -n ${env.PROJECT_PROD} -o jsonpath='{.spec.host}'", returnStdout: true).trim()
+                        def prodHost = sh(script: "./oc get route ${env.APP_PROD} -o jsonpath='{.spec.host}'", returnStdout: true).trim()
                         echo "=== Проверяем живой URL прод-контура: http://${prodHost} ==="
-                        
                         sh "curl -k --fail --connect-timeout 5 --retry 2 http://${prodHost}"
                     }
                 }
