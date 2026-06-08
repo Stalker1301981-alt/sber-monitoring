@@ -56,7 +56,7 @@ if __name__ == "__main__":
         stage("3. Сборка образа в OpenShift") {
             steps {
                 echo "=== Сборка силами OpenShift (S2I) ==="
-                // Прописываем данные напрямую жестким текстом, исключая переменные Jenkins и баги их интерполяции
+                // Прямой жесткий текст без переменных Jenkins, чтобы избежать багов интерполяции
                 sh """
                     kubectl config set-cluster sandbox --server=https://openshiftapps.com --insecure-skip-tls-verify=true
                     kubectl config set-credentials jenkins --token=sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4
