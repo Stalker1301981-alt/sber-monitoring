@@ -104,17 +104,19 @@ if __name__ == "__main__":
         
         stage("5. Деплой на ОСНОВУ") {
             steps {
-                echo "=== Деплой ПРОД в пространство kovaliov2700-dev === "
+                echo "=== Деплой ПРОД в пространство kovaliov2700-dev ==="
                 sh """
                     # Проверяем и создаем PROD Deployment
-                    kubectl get deployment/${env.APP_PROD} -n ${env.MY_NAMESPACE} >/dev/null 2>&1 || {
+                    kubectl get deployment/sber-monitoring-prod -n kovaliov2700-dev >/dev/null 2>&1 || {
                         echo "Инициализация приложения sber-monitoring-prod..."
-                        kubectl create deployment ${env.APP_PROD} --image=python:3.9-slim -n ${env.MY_NAMESPACE}
-                        kubectl expose deployment ${env.APP_PROD} --port=8080 --target-port=8080 -n ${env.MY_NAMESPACE}
+                        kubectl create deployment sber-monitoring-prod --image=python:3.9-slim -n kovaliov2700-dev
                     }
                     
+                    # ДОБАВЛЯЕМ || true в конец, чтобы пайплайн не падал, если сервис уже создан
+                    kubectl expose deployment sber-monitoring-prod --port=8080 --target-port=8080 -n kovaliov2700-dev || true
+                    
                     # Накатываем переменные на прод
-                    kubectl set env deployment/${env.APP_PROD} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} -n ${env.MY_NAMESPACE} --overwrite
+                    kubectl set env deployment/sber-monitoring-prod DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} -n ${env.MY_NAMESPACE} --overwrite
                 """
             }
         }
