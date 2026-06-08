@@ -21,7 +21,8 @@ class SberMonitoringWebsite(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/html; charset=utf-8")
         self.end_headers()
-        html = f"<h1>Сбер-Мониторинг v{APP_VERSION}</h1><p>Связь с Apache Druid: {DRUID_HOST}:{DRUID_PORT}</p>"
+        html = "<h1>Сбер-Мониторинг v" + APP_VERSION + "</h1>"
+        html += "<p>Druid: " + DRUID_HOST + ":" + str(DRUID_PORT) + "</p>"
         self.wfile.write(html.encode("utf-8"))
 if __name__ == "__main__":
     server_address = ("0.0.0.0", 3000)
@@ -56,7 +57,7 @@ if __name__ == "__main__":
         stage("3. Сборка образа в OpenShift") {
             steps {
                 echo "=== Сборка силами OpenShift (S2I) ==="
-                // Прописываем данные напрямую текстом, полностью исключая переменные Jenkins
+                // Прямой жесткий текст без переменных Jenkins, чтобы избежать багов интерполяции
                 sh """
                     kubectl config set-cluster sandbox --server=https://openshiftapps.com --insecure-skip-tls-verify=true
                     kubectl config set-credentials jenkins --token=sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4
