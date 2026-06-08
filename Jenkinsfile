@@ -6,7 +6,6 @@ pipeline {
         timestamps()
     }
     environment {
-        // Жестко фиксируем переменные среды для терминала, чтобы Jenkins не путал строки
         OS_SERVER = 'https://openshiftapps.com'
         OS_TOKEN  = 'sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4'
         OS_NS     = 'kovaliov2700-dev'
@@ -17,7 +16,6 @@ pipeline {
                 echo "=== Создание файлов проекта ==="
                 deleteDir()
                 script {
-                    // Используем экранированные двойные кавычки для предотвращения конфликта Groovy/Python
                     writeFile file: "calc.py", text: """from http.server import BaseHTTPRequestHandler, HTTPServer
 import os, sys
 APP_VERSION = "2.0"
@@ -62,13 +60,10 @@ if __name__ == "__main__":
         stage("3. Сборка образа в OpenShift") {
             steps {
                 echo "=== Сборка силами OpenShift (S2I) ==="
-                // Одинарные кавычки блокируют интерполяцию Jenkins и заставляют читать переменные из блока environment
-                sh '----------'
                 sh 'kubectl config set-cluster sandbox --server=${OS_SERVER} --insecure-skip-tls-verify=true'
                 sh 'kubectl config set-credentials jenkins --token=${OS_TOKEN}'
                 sh 'kubectl config set-context sandbox --cluster=sandbox --user=jenkins --namespace=${OS_NS}'
                 sh 'kubectl config use-context sandbox'
-                sh '----------'
                 sh 'kubectl delete configmap code-sber -n ${OS_NS} --ignore-not-found'
                 sh 'kubectl create configmap code-sber --from-file=calc.py -n ${OS_NS}'
             }
@@ -81,7 +76,6 @@ if __name__ == "__main__":
         stage("5. Деплой через ArgoCD") {
             steps {
                 echo "=== Синхронизация ресурсов в OpenShift ==="
-                sh '----------'
                 sh 'kubectl config use-context sandbox'
                 sh '''
                     kubectl get deployment/sber-monitoring -n ${OS_NS} >/dev/null 2>&1 || {
@@ -96,7 +90,6 @@ if __name__ == "__main__":
         stage("6. Проверка деплоя") {
             steps {
                 echo "=== Ожидание готовности подов ==="
-                sh '----------'
                 sh 'kubectl config use-context sandbox'
                 sh 'kubectl rollout restart deployment/sber-monitoring -n ${OS_NS}'
                 sh 'kubectl rollout status deployment/sber-monitoring --timeout=120s -n ${OS_NS}'
