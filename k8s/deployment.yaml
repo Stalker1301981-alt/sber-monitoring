@@ -2,8 +2,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sber-monitoring
+  labels:
+    app: sber-monitoring
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: sber-monitoring
@@ -14,14 +16,6 @@ spec:
     spec:
       containers:
       - name: app
-        image: python:3.9-slim
+        image: k3d-sber-registry:5000/sber-monitoring:latest
         ports:
-        - containerPort: 8080
-        command: ["python3", "calc.py"]
-        env:
-        - name: DRUID_HOST
-          value: druid-broker.infra.svc.cluster.local
-        - name: DRUID_PORT
-          value: "8082"
-        - name: APP_VERSION
-          value: "2.0"
+        - containerPort: 3000
