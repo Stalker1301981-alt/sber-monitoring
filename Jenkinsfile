@@ -6,12 +6,11 @@ pipeline {
         timestamps()
     }
     environment {
-        // --- НАСТРОЙКИ ОБЛАЧНОЙ ПЕСОЧНИЦЫ ---
+        // --- ЧЕТКИЕ НАСТРОЙКИ КЛАСТЕРА И ТОКЕНА ---
         OPENSHIFT_API = 'https://openshiftapps.com'
         OS_TOKEN = 'sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4'
-        GIT_REPO = 'https://github.com/Stalker1301981-alt/sber-monitoring.git'
         
-        // --- ИМЕНА ПРИЛОЖЕНИЙ ДЛЯ ОДНОГО ПРОЕКТА ---
+        // --- ИМЕНА ПРИЛОЖЕНИЙ ---
         APP_TEST = "sber-monitoring-test"
         APP_PROD = "sber-monitoring-prod"
         
@@ -71,23 +70,31 @@ if __name__ == "__main__":
             steps {
                 echo "=== Деплой ТЕСТ через Kubernetes CLI ==="
                 sh """
-                    # Авторизуемся через стандартный kubectl (он точно есть в системе)
+                    # 1. Авторизация и жесткая привязка к правильному серверу API
                     kubectl config set-cluster sandbox --server=${env.OPENSHIFT_API} --insecure-skip-tls-verify=true
                     kubectl config set-credentials jenkins --token=${env.OS_TOKEN}
                     kubectl config set-context sandbox --cluster=sandbox --user=jenkins
                     kubectl config use-context sandbox
                     
-                    # Разворачиваем Python-приложение напрямую из вашего публичного GitHub (S2I)
-                    # Если оно уже есть — команда просто пропустит создание, если нет — создаст с нуля
-                    kubectl get deployment/${env.APP_TEST} >/dev/null 2>&1 || {
-                        echo "Инициализация приложения в облаке..."
-                        # Используем встроенный в OpenShift образ-сборщик python
-                        kubectl create deployment ${env.APP_TEST} --image=image-registry.openshift-image-registry.svc:5000/openshift/python:3.9-ubi8
-                        kubectl expose deployment ${env.APP_TEST} --port=8080
+                    # 2. Автоматическое определение имени вашего Sandbox-проекта из токена
+                    # (Скрипт сам поймет, какой namespace вам выделило облако Red Hat)
+                    MY_NAMESPACE=\$(kubectl target-namespace 2>/dev/null || kubectl config view --minify -o jsonpath='{..namespace}' 2>/dev/null || echo "")
+                    if [ -z "\$MY_NAMESPACE" ]; then
+                        # Резервный способ определения namespace через запрос к API
+                        MY_NAMESPACE=\$(curl -k -s -H "Authorization: Bearer ${env.OS_TOKEN}" "${env.OPENSHIFT_API}/apis/project.openshift.io/v1/projects" | grep -o '"name": "[^"]*' | head -n 1 | sed 's/"name": "//')
+                    fi
+                    echo "Обнаружен рабочий namespace: \$MY_NAMESPACE"
+                    
+                    # 3. Деплой в определенный Sandbox-проект
+                    kubectl get deployment/${env.APP_TEST} -n \$MY_NAMESPACE >/dev/null 2>&1 || {
+                        echo "Инициализация приложения sber-monitoring-test..."
+                        # Берем официальный стабильный образ python
+                        kubectl create deployment ${env.APP_TEST} --image=python:3.9-slim -n \$MY_NAMESPACE
+                        kubectl expose deployment ${env.APP_TEST} --port=8080 -n \$MY_NAMESPACE
                     }
                     
-                    # Накатываем переменные окружения
-                    kubectl set env deployment/${env.APP_TEST} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} --overwrite
+                    # 4. Накатываем переменные окружения в этот проект
+                    kubectl set env deployment/${env.APP_TEST} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} -n \$MY_NAMESPACE --overwrite
                 """
             }
         }
@@ -106,11 +113,17 @@ if __name__ == "__main__":
             steps {
                 echo "=== Деплой ПРОД через Kubernetes CLI ==="
                 sh """
-                    kubectl get deployment/${env.APP_PROD} >/dev/null 2>&1 || {
-                        kubectl create deployment ${env.APP_PROD} --image=image-registry.openshift-image-registry.svc:5000/openshift/python:3.9-ubi8
-                        kubectl expose deployment ${env.APP_PROD} --port=8080
+                    # Повторяем логику определения namespace для прода
+                    MY_NAMESPACE=\$(kubectl config view --minify -o jsonpath='{..namespace}' 2>/dev/null || echo "")
+                    if [ -z "\$MY_NAMESPACE" ]; then
+                        MY_NAMESPACE=\$(curl -k -s -H "Authorization: Bearer ${env.OS_TOKEN}" "${env.OPENSHIFT_API}/apis/project.openshift.io/v1/projects" | grep -o '"name": "[^"]*' | head -n 1 | sed 's/"name": "//')
+                    fi
+                    
+                    kubectl get deployment/${env.APP_PROD} -n \$MY_NAMESPACE >/dev/null 2>&1 || {
+                        kubectl create deployment ${env.APP_PROD} --image=python:3.9-slim -n \$MY_NAMESPACE
+                        kubectl expose deployment ${env.APP_PROD} --port=8080 -n \$MY_NAMESPACE
                     }
-                    kubectl set env deployment/${env.APP_PROD} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} --overwrite
+                    kubectl set env deployment/${env.APP_PROD} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} -n \$MY_NAMESPACE --overwrite
                 """
             }
         }
