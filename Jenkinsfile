@@ -6,10 +6,14 @@ pipeline {
         timestamps()
     }
     environment {
+        // --- ЧЕТКИЕ РЕАЛЬНЫЕ НАСТРОЙКИ КЛАСТЕРА SANDBOX ---
         OPENSHIFT_API = 'https://openshiftapps.com'
         OS_TOKEN = 'sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4'
+        
+        // --- ТВОЙ ЛИЧНЫР ПРОЕКТ В ПЕСОЧНИЦЕ ---
         MY_NAMESPACE = "kovaliov2700-dev"
         
+        // --- ИМЕНА ПРИЛОЖЕНИЙ ДЛЯ ТЕСТА И ПРОДА ---
         APP_TEST = "sber-monitoring-test"
         APP_PROD = "sber-monitoring-prod"
         
@@ -69,27 +73,27 @@ if __name__ == "__main__":
             steps {
                 echo "=== Деплой ТЕСТ в пространство ${env.MY_NAMESPACE} ==="
                 sh """
+                    # 1. Настройка контекста kubectl с подстановкой реальной переменной OPENSHIFT_API
                     kubectl config set-cluster sandbox --server=${env.OPENSHIFT_API} --insecure-skip-tls-verify=true
                     kubectl config set-credentials jenkins --token=${env.OS_TOKEN}
                     kubectl config set-context sandbox --cluster=sandbox --user=jenkins --namespace=${env.MY_NAMESPACE}
                     kubectl config use-context sandbox
                     
-                    # 1. Загружаем свежий код calc.py в OpenShift как ConfigMap (удаляем старый и создаем новый)
+                    # 2. Обновляем ConfigMap с кодом calc.py в OpenShift
                     kubectl delete configmap code-test -n ${env.MY_NAMESPACE} --ignore-not-found
                     kubectl create configmap code-test --from-file=calc.py -n ${env.MY_NAMESPACE}
                     
-                    # 2. Инициализируем Deployment, если его нет
+                    # 3. Проверяем и создаем Deployment, если его нет
                     kubectl get deployment/${env.APP_TEST} -n ${env.MY_NAMESPACE} >/dev/null 2>&1 || {
-                        echo "Инициализация sber-monitoring-test..."
-                        # Создаем под с командой запуска скрипта из примонтированной папки
+                        echo "Инициализация приложения sber-monitoring-test..."
                         kubectl create deployment ${env.APP_TEST} --image=python:3.9-slim -n ${env.MY_NAMESPACE} -- /bin/sh -c "python /code/calc.py"
                         kubectl expose deployment ${env.APP_TEST} --port=8080 --target-port=8080 -n ${env.MY_NAMESPACE}
                         
-                        # Монтируем наш ConfigMap с кодом внутрь контейнера в папку /code
+                        # Подключаем папку с кодом из ConfigMap внутрь контейнера
                         kubectl set volume deployment/${env.APP_TEST} --add --name=code-volume --type=configmap --configmap-name=code-test --mount-path=/code -n ${env.MY_NAMESPACE}
                     }
                     
-                    # 3. Обновляем переменные и заставляем поды перезапуститься с новым кодом
+                    # 4. Обновляем переменные и перезапускаем поды для применения нового кода
                     kubectl set env deployment/${env.APP_TEST} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} -n ${env.MY_NAMESPACE} --overwrite
                     kubectl rollout restart deployment/${env.APP_TEST} -n ${env.MY_NAMESPACE}
                 """
@@ -110,20 +114,20 @@ if __name__ == "__main__":
             steps {
                 echo "=== Деплой ПРОД в пространство ${env.MY_NAMESPACE} ==="
                 sh """
-                    # 1. Загружаем код для ПРОДа
+                    # 1. Обновляем ConfigMap с кодом для ПРОДа
                     kubectl delete configmap code-prod -n ${env.MY_NAMESPACE} --ignore-not-found
                     kubectl create configmap code-prod --from-file=calc.py -n ${env.MY_NAMESPACE}
                     
-                    # 2. Инициализируем PROD Deployment
+                    # 2. Проверяем и создаем PROD Deployment
                     kubectl get deployment/${env.APP_PROD} -n ${env.MY_NAMESPACE} >/dev/null 2>&1 || {
-                        echo "Инициализация sber-monitoring-prod..."
+                        echo "Инициализация приложения sber-monitoring-prod..."
                         kubectl create deployment ${env.APP_PROD} --image=python:3.9-slim -n ${env.MY_NAMESPACE} -- /bin/sh -c "python /code/calc.py"
                         kubectl expose deployment ${env.APP_PROD} --port=8080 --target-port=8080 -n ${env.MY_NAMESPACE}
                         
                         kubectl set volume deployment/${env.APP_PROD} --add --name=code-volume --type=configmap --configmap-name=code-prod --mount-path=/code -n ${env.MY_NAMESPACE}
                     }
                     
-                    # 3. Обновляем переменные и перезапускаем
+                    # 3. Накатываем переменные и перезапускаем
                     kubectl set env deployment/${env.APP_PROD} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} -n ${env.MY_NAMESPACE} --overwrite
                     kubectl rollout restart deployment/${env.APP_PROD} -n ${env.MY_NAMESPACE}
                 """
