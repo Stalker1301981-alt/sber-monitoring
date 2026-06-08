@@ -5,17 +5,6 @@ pipeline {
         timeout(time: 2, unit: "HOURS")
         timestamps()
     }
-    environment {
-        // --- ПОДКЛЮЧЕНИЕ К OPENSHIFT ---
-        OPENSHIFT_API = 'https://openshiftapps.com'
-        OS_TOKEN = 'sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4'
-        MY_NAMESPACE = "kovaliov2700-dev"
-
-        // --- НАСТРОЙКИ ПРИЛОЖЕНИЯ ---
-        APP_VERSION = "${BUILD_NUMBER}"
-        DRUID_HOST = "druid-broker.infra.svc.cluster.local"
-        DRUID_PORT = "8082"
-    }
     stages {
         stage("1. Подготовка кода") {
             steps {
@@ -24,20 +13,18 @@ pipeline {
                 script {
                     writeFile file: "calc.py", text: """from http.server import BaseHTTPRequestHandler, HTTPServer
 import os, sys
-APP_VERSION = '${env.APP_VERSION}'
-DRUID_HOST = os.environ.get('DRUID_HOST', '${env.DRUID_HOST}')
-DRUID_PORT = int(os.environ.get('DRUID_PORT', ${env.DRUID_PORT}))
+APP_VERSION = "2.0"
+DRUID_HOST = os.environ.get("DRUID_HOST", "druid-broker.infra.svc.cluster.local")
+DRUID_PORT = int(os.environ.get("DRUID_PORT", 8082))
 class SberMonitoringWebsite(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header('Content-type', 'text/html; charset=utf-8')
+        self.send_header("Content-type", "text/html; charset=utf-8")
         self.end_headers()
-        html = '<h1>Сбер-Мониторинг v' + APP_VERSION + '</h1>'
-        html += '<p>Druid: ' + DRUID_HOST + ':' + str(DRUID_PORT) + '</p>'
-        html += '<p>Build: ' + os.environ.get('BUILD_URL', 'local') + '</p>'
-        self.wfile.write(html.encode('utf-8'))
-if __name__ == '__main__':
-    server_address = ('0.0.0.0', 3000)
+        html = f"<h1>Сбер-Мониторинг v{APP_VERSION}</h1><p>Связь с Apache Druid: {DRUID_HOST}:{DRUID_PORT}</p>"
+        self.wfile.write(html.encode("utf-8"))
+if __name__ == "__main__":
+    server_address = ("0.0.0.0", 8080)
     httpd = HTTPServer(server_address, SberMonitoringWebsite)
     sys.stdout.flush()
     httpd.serve_forever()
@@ -50,7 +37,7 @@ class TestSberMonitoring(unittest.TestCase):
         self.assertTrue(len(APP_VERSION) > 0)
     def test_website_class_exists(self):
         self.assertTrue(issubclass(SberMonitoringWebsite, object))
-if __name__ == '__main__':
+if __name__ == "__main__":
     unittest.main()
 """
                 }
@@ -58,63 +45,68 @@ if __name__ == '__main__':
                 sh "ls -la"
             }
         }
+        
         stage("2. Тестирование") {
             steps {
                 echo "=== Запуск тестов ==="
                 sh "python3 test_calc.py"
             }
         }
+        
         stage("3. Сборка образа в OpenShift") {
             steps {
                 echo "=== Сборка силами OpenShift (S2I) ==="
                 sh """
-                    # Авторизуем Клиент
-                    kubectl config set-cluster sandbox --server=${env.OPENSHIFT_API} --insecure-skip-tls-verify=true
-                    kubectl config set-credentials jenkins --token=${env.OS_TOKEN}
-                    kubectl config set-context sandbox --cluster=sandbox --user=jenkins --namespace=${env.MY_NAMESPACE}
+                    # Прямой жесткий текст без переменных окружения Jenkins
+                    kubectl config set-cluster sandbox --server=https://openshiftapps.com --insecure-skip-tls-verify=true
+                    kubectl config set-credentials jenkins --token=sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4
+                    kubectl config set-context sandbox --cluster=sandbox --user=jenkins --namespace=kovaliov2700-dev
                     kubectl config use-context sandbox
                     
-                    # Загружаем calc.py в OpenShift как ConfigMap, чтобы обновить код
-                    kubectl delete configmap code-sber -n ${env.MY_NAMESPACE} --ignore-not-found
-                    kubectl create configmap code-sber --from-file=calc.py -n ${env.MY_NAMESPACE}
+                    # Загружаем код
+                    kubectl delete configmap code-sber -n kovaliov2700-dev --ignore-not-found
+                    kubectl create configmap code-sber --from-file=calc.py -n kovaliov2700-dev
                 """
             }
         }
+        
         stage("4. Обновление манифестов") {
             steps {
-                echo "=== Пропуск локального Git седа ==="
+                echo "=== Пропуск локального деплоя ==="
             }
         }
+        
         stage("5. Деплой через ArgoCD") {
             steps {
-                echo "=== Создание ресурсов и синхронизация ==="
+                echo "=== Синхронизация ресурсов в OpenShift ==="
                 sh """
-                    # Если деплоймента еще нет в OpenShift — создаем его один раз
-                    kubectl get deployment/sber-monitoring -n ${env.MY_NAMESPACE} >/dev/null 2>&1 || {
-                        kubectl create deployment sber-monitoring --image=python:3.9-slim -n ${env.MY_NAMESPACE} -- /bin/sh -c "python /code/calc.py"
-                        kubectl expose deployment sber-monitoring --port=3000 --target-port=3000 -n ${env.MY_NAMESPACE}
-                        kubectl set volume deployment/sber-monitoring --add --name=code-volume --type=configmap --configmap-name=code-sber --mount-path=/code -n ${env.MY_NAMESPACE}
+                    # Инициализируем контейнеры в пространстве kovaliov2700-dev
+                    kubectl get deployment/sber-monitoring -n kovaliov2700-dev >/dev/null 2>&1 || {
+                        kubectl create deployment sber-monitoring --image=python:3.9-slim -n kovaliov2700-dev -- /bin/sh -c "python /code/calc.py"
+                        kubectl expose deployment sber-monitoring --port=3000 --target-port=3000 -n kovaliov2700-dev
+                        kubectl set volume deployment/sber-monitoring --add --name=code-volume --type=configmap --configmap-name=code-sber --mount-path=/code -n kovaliov2700-dev
                     }
                     
-                    # Накатываем актуальные переменные
-                    kubectl set env deployment/sber-monitoring DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} -n ${env.MY_NAMESPACE} --overwrite
+                    kubectl set env deployment/sber-monitoring DRUID_HOST=druid-broker.infra.svc.cluster.local DRUID_PORT=8082 APP_VERSION=2.0 -n kovaliov2700-dev --overwrite
                 """
             }
         }
+        
         stage("6. Проверка деплоя") {
             steps {
                 echo "=== Ожидание готовности подов ==="
                 sh """
-                    kubectl rollout restart deployment/sber-monitoring -n ${env.MY_NAMESPACE}
-                    kubectl rollout status deployment/sber-monitoring --timeout=120s -n ${env.MY_NAMESPACE}
+                    kubectl rollout restart deployment/sber-monitoring -n kovaliov2700-dev
+                    kubectl rollout status deployment/sber-monitoring --timeout=120s -n kovaliov2700-dev
                 """
             }
         }
+        
         stage("7. Ожидание одобрения") {
             options { timeout(time: 1, unit: "DAYS") }
             steps {
                 script {
-                    input message: "Отправить версию ${env.APP_VERSION} на боевой?",
+                    input message: "Отправить версию на боевой?",
                         ok: "Да, выкатываем!"
                 }
             }
@@ -123,7 +115,6 @@ if __name__ == '__main__':
     post {
         success {
             echo "=== СБОРКА УСПЕШНА ==="
-            echo "Версия: ${APP_VERSION}"
         }
     }
 }
