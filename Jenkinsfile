@@ -6,17 +6,9 @@ pipeline {
         timestamps()
     }
     environment {
-        // --- ЧЕТКИЕ РЕАЛЬНЫЕ НАСТРОЙКИ КЛАСТЕРА SANDBOX ---
-        OPENSHIFT_API = 'https://openshiftapps.com'
-        OS_TOKEN = 'sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4'
-        
-        // --- ТВОЙ ЛИЧНЫР ПРОЕКТ В ПЕСОЧНИЦЕ ---
         MY_NAMESPACE = "kovaliov2700-dev"
-        
-        // --- ИМЕНА ПРИЛОЖЕНИЙ ДЛЯ ТЕСТА И ПРОДА ---
         APP_TEST = "sber-monitoring-test"
         APP_PROD = "sber-monitoring-prod"
-        
         APP_VERSION = "2.0"
         DRUID_HOST = "druid-broker.infra.svc.cluster.local"
         DRUID_PORT = "8082"
@@ -71,31 +63,31 @@ if __name__ == "__main__":
         
         stage("3. Деплой на ТЕСТ") {
             steps {
-                echo "=== Деплой ТЕСТ в пространство ${env.MY_NAMESPACE} ==="
+                echo "=== Деплой ТЕСТ в пространство kovaliov2700-dev ==="
                 sh """
-                    # 1. Настройка контекста kubectl с подстановкой реальной переменной OPENSHIFT_API
-                    kubectl config set-cluster sandbox --server=${env.OPENSHIFT_API} --insecure-skip-tls-verify=true
-                    kubectl config set-credentials jenkins --token=${env.OS_TOKEN}
-                    kubectl config set-context sandbox --cluster=sandbox --user=jenkins --namespace=${env.MY_NAMESPACE}
+                    # Жестко указываем твой реальный рабочий URL API OpenShift
+                    kubectl config set-cluster sandbox --server=https://openshiftapps.com --insecure-skip-tls-verify=true
+                    kubectl config set-credentials jenkins --token=sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4
+                    kubectl config set-context sandbox --cluster=sandbox --user=jenkins --namespace=kovaliov2700-dev
                     kubectl config use-context sandbox
                     
-                    # 2. Обновляем ConfigMap с кодом calc.py в OpenShift
-                    kubectl delete configmap code-test -n ${env.MY_NAMESPACE} --ignore-not-found
-                    kubectl create configmap code-test --from-file=calc.py -n ${env.MY_NAMESPACE}
+                    # Обновляем ConfigMap с кодом
+                    kubectl delete configmap code-test -n kovaliov2700-dev --ignore-not-found
+                    kubectl create configmap code-test --from-file=calc.py -n kovaliov2700-dev
                     
-                    # 3. Проверяем и создаем Deployment, если его нет
-                    kubectl get deployment/${env.APP_TEST} -n ${env.MY_NAMESPACE} >/dev/null 2>&1 || {
+                    # Проверяем и создаем Deployment, если его нет
+                    kubectl get deployment/sber-monitoring-test -n kovaliov2700-dev >/dev/null 2>&1 || {
                         echo "Инициализация приложения sber-monitoring-test..."
-                        kubectl create deployment ${env.APP_TEST} --image=python:3.9-slim -n ${env.MY_NAMESPACE} -- /bin/sh -c "python /code/calc.py"
-                        kubectl expose deployment ${env.APP_TEST} --port=8080 --target-port=8080 -n ${env.MY_NAMESPACE}
+                        kubectl create deployment sber-monitoring-test --image=python:3.9-slim -n kovaliov2700-dev -- /bin/sh -c "python /code/calc.py"
+                        kubectl expose deployment sber-monitoring-test --port=8080 --target-port=8080 -n kovaliov2700-dev
                         
-                        # Подключаем папку с кодом из ConfigMap внутрь контейнера
-                        kubectl set volume deployment/${env.APP_TEST} --add --name=code-volume --type=configmap --configmap-name=code-test --mount-path=/code -n ${env.MY_NAMESPACE}
+                        # Монтируем код внутрь контейнера
+                        kubectl set volume deployment/sber-monitoring-test --add --name=code-volume --type=configmap --configmap-name=code-test --mount-path=/code -n kovaliov2700-dev
                     }
                     
-                    # 4. Обновляем переменные и перезапускаем поды для применения нового кода
-                    kubectl set env deployment/${env.APP_TEST} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} -n ${env.MY_NAMESPACE} --overwrite
-                    kubectl rollout restart deployment/${env.APP_TEST} -n ${env.MY_NAMESPACE}
+                    # Обновляем переменные и перезапускаем поды
+                    kubectl set env deployment/sber-monitoring-test DRUID_HOST=druid-broker.infra.svc.cluster.local DRUID_PORT=8082 APP_VERSION=2.0 -n kovaliov2700-dev --overwrite
+                    kubectl rollout restart deployment/sber-monitoring-test -n kovaliov2700-dev
                 """
             }
         }
@@ -104,7 +96,7 @@ if __name__ == "__main__":
             options { timeout(time: 1, unit: "DAYS") }
             steps {
                 script {
-                    input message: "Отправить версию ${env.APP_VERSION} на боевой (PROD)?",
+                    input message: "Отправить версию 2.0 на боевой (PROD)?",
                         ok: "Да, выкатываем!"
                 }
             }
@@ -112,24 +104,24 @@ if __name__ == "__main__":
         
         stage("5. Деплой на ОСНОВУ") {
             steps {
-                echo "=== Деплой ПРОД в пространство ${env.MY_NAMESPACE} ==="
+                echo "=== Деплой ПРОД в пространство kovaliov2700-dev ==="
                 sh """
-                    # 1. Обновляем ConfigMap с кодом для ПРОДа
-                    kubectl delete configmap code-prod -n ${env.MY_NAMESPACE} --ignore-not-found
-                    kubectl create configmap code-prod --from-file=calc.py -n ${env.MY_NAMESPACE}
+                    # Обновляем ConfigMap с кодом для ПРОДа
+                    kubectl delete configmap code-prod -n kovaliov2700-dev --ignore-not-found
+                    kubectl create configmap code-prod --from-file=calc.py -n kovaliov2700-dev
                     
-                    # 2. Проверяем и создаем PROD Deployment
-                    kubectl get deployment/${env.APP_PROD} -n ${env.MY_NAMESPACE} >/dev/null 2>&1 || {
+                    # Проверяем и создаем PROD Deployment
+                    kubectl get deployment/sber-monitoring-prod -n kovaliov2700-dev >/dev/null 2>&1 || {
                         echo "Инициализация приложения sber-monitoring-prod..."
-                        kubectl create deployment ${env.APP_PROD} --image=python:3.9-slim -n ${env.MY_NAMESPACE} -- /bin/sh -c "python /code/calc.py"
-                        kubectl expose deployment ${env.APP_PROD} --port=8080 --target-port=8080 -n ${env.MY_NAMESPACE}
+                        kubectl create deployment sber-monitoring-prod --image=python:3.9-slim -n kovaliov2700-dev -- /bin/sh -c "python /code/calc.py"
+                        kubectl expose deployment sber-monitoring-prod --port=8080 --target-port=8080 -n kovaliov2700-dev
                         
-                        kubectl set volume deployment/${env.APP_PROD} --add --name=code-volume --type=configmap --configmap-name=code-prod --mount-path=/code -n ${env.MY_NAMESPACE}
+                        kubectl set volume deployment/sber-monitoring-prod --add --name=code-volume --type=configmap --configmap-name=code-prod --mount-path=/code -n kovaliov2700-dev
                     }
                     
-                    # 3. Накатываем переменные и перезапускаем
-                    kubectl set env deployment/${env.APP_PROD} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} -n ${env.MY_NAMESPACE} --overwrite
-                    kubectl rollout restart deployment/${env.APP_PROD} -n ${env.MY_NAMESPACE}
+                    # Накатываем переменные на прод и перезапускаем
+                    kubectl set env deployment/sber-monitoring-prod DRUID_HOST=druid-broker.infra.svc.cluster.local DRUID_PORT=8082 APP_VERSION=2.0 -n kovaliov2700-dev --overwrite
+                    kubectl rollout restart deployment/sber-monitoring-prod -n kovaliov2700-dev
                 """
             }
         }
