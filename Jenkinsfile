@@ -11,7 +11,7 @@ pipeline {
         OS_TOKEN = 'sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4'
         MY_NAMESPACE = "kovaliov2700-dev"
 
-        // --- ТВОИ ОРИГИНАЛЬНЫЕ НАСТРОЙКИ ---
+        // --- ВАШИ ОРИГИНАЛЬНЫЕ НАСТРОЙКИ ---
         APP_VERSION = "${BUILD_NUMBER}"
         REGISTRY = "k3d-sber-registry:5000"
         IMAGE = "${REGISTRY}/sber-monitoring:${BUILD_NUMBER}"
@@ -77,13 +77,16 @@ CMD ["python3", "calc.py"]
             steps {
                 echo "=== Kaniko build & push ==="
                 sh """
-                    # Создаем конфиг локально в рабочей папке Jenkins, а не в корне системы
+                    # Создаем локальные папки в директории Jenkins
                     mkdir -p .docker
+                    mkdir -p .kaniko
                     echo '{}' > .docker/config.json
                     
+                    # Запускаем Kaniko, изолировав его папки внутри проекта
                     /usr/local/bin/executor \
                         --context=${WORKSPACE} \
                         --dockerfile=${WORKSPACE}/Dockerfile \
+                        --kaniko-dir=${WORKSPACE}/.kaniko \
                         --destination=${IMAGE} \
                         --destination=${IMAGE_LATEST} \
                         --force --skip-tls-verify \
@@ -114,9 +117,8 @@ CMD ["python3", "calc.py"]
         }
         stage("6. Проверка деплоя") {
             steps {
-                echo "=== Проверка статуса в облаке OpenShift ==="
+                echo "=== Проверка статуса в облаке OpenShift === "
                 sh """
-                    # Логин в твой живой OpenShift для контроля раскатки
                     kubectl config set-cluster sandbox --server=${env.OPENSHIFT_API} --insecure-skip-tls-verify=true
                     kubectl config set-credentials jenkins --token=${env.OS_TOKEN}
                     kubectl config set-context sandbox --cluster=sandbox --user=jenkins --namespace=${env.MY_NAMESPACE}
