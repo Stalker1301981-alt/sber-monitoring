@@ -6,16 +6,13 @@ pipeline {
         timestamps()
     }
     environment {
-        // --- ДАННЫЕ ТВОЕГО OPENSHIFT CLUSTER ---
+        // --- ПОДКЛЮЧЕНИЕ К OPENSHIFT ---
         OPENSHIFT_API = 'https://openshiftapps.com'
         OS_TOKEN = 'sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4'
         MY_NAMESPACE = "kovaliov2700-dev"
 
-        // --- ВАШИ ОРИГИНАЛЬНЫЕ НАСТРОЙКИ ---
+        // --- НАСТРОЙКИ ПРИЛОЖЕНИЯ ---
         APP_VERSION = "${BUILD_NUMBER}"
-        REGISTRY = "k3d-sber-registry:5000"
-        IMAGE = "${REGISTRY}/sber-monitoring:${BUILD_NUMBER}"
-        IMAGE_LATEST = "${REGISTRY}/sber-monitoring:latest"
         DRUID_HOST = "druid-broker.infra.svc.cluster.local"
         DRUID_PORT = "8082"
     }
@@ -56,12 +53,6 @@ class TestSberMonitoring(unittest.TestCase):
 if __name__ == '__main__':
     unittest.main()
 """
-                    writeFile file: "Dockerfile", text: """FROM python:3-slim
-WORKDIR /app
-COPY calc.py .
-EXPOSE 3000
-CMD ["python3", "calc.py"]
-"""
                 }
                 sh "rm -rf __pycache__"
                 sh "ls -la"
@@ -73,57 +64,48 @@ CMD ["python3", "calc.py"]
                 sh "python3 test_calc.py"
             }
         }
-        stage("3. Сборка Docker образа") {
+        stage("3. Сборка образа в OpenShift") {
             steps {
-                echo "=== Kaniko build & push ==="
+                echo "=== Сборка силами OpenShift (S2I) ==="
                 sh """
-                    # Создаем локальные папки в директории Jenkins
-                    mkdir -p .docker
-                    mkdir -p .kaniko
-                    echo '{}' > .docker/config.json
-                    
-                    # Запускаем Kaniko, изолировав его папки внутри проекта
-                    /usr/local/bin/executor \
-                        --context=${WORKSPACE} \
-                        --dockerfile=${WORKSPACE}/Dockerfile \
-                        --kaniko-dir=${WORKSPACE}/.kaniko \
-                        --destination=${IMAGE} \
-                        --destination=${IMAGE_LATEST} \
-                        --force --skip-tls-verify \
-                        --insecure --insecure-registry=${REGISTRY}
-                """
-            }
-        }
-        stage("4. Обновление Git манифестов") {
-            steps {
-                sh """
-                    sed -i 's|image: .*|image: ${IMAGE}|' ${WORKSPACE}/k8s/deployment.yaml
-                    git config user.email "jenkins@sber-monitoring"
-                    git config user.name "Jenkins CI"
-                    git add k8s/deployment.yaml
-                    git commit -m "Update image tag to ${BUILD_NUMBER}" || true
-                    git push origin main
-                """
-            }
-        }
-        stage("5. Деплой через ArgoCD") {
-            steps {
-                echo "=== ArgoCD sync ==="
-                sh """
-                    argocd login localhost:8443 --username admin --password my3Somy9Mwkmp7fN --insecure
-                    argocd app sync sber-monitoring --grpc-web
-                """
-            }
-        }
-        stage("6. Проверка деплоя") {
-            steps {
-                echo "=== Проверка статуса в облаке OpenShift === "
-                sh """
+                    # Авторизуем Клиент
                     kubectl config set-cluster sandbox --server=${env.OPENSHIFT_API} --insecure-skip-tls-verify=true
                     kubectl config set-credentials jenkins --token=${env.OS_TOKEN}
                     kubectl config set-context sandbox --cluster=sandbox --user=jenkins --namespace=${env.MY_NAMESPACE}
                     kubectl config use-context sandbox
                     
+                    # Загружаем calc.py в OpenShift как ConfigMap, чтобы обновить код
+                    kubectl delete configmap code-sber -n ${env.MY_NAMESPACE} --ignore-not-found
+                    kubectl create configmap code-sber --from-file=calc.py -n ${env.MY_NAMESPACE}
+                """
+            }
+        }
+        stage("4. Обновление манифестов") {
+            steps {
+                echo "=== Пропуск локального Git седа ==="
+            }
+        }
+        stage("5. Деплой через ArgoCD") {
+            steps {
+                echo "=== Создание ресурсов и синхронизация ==="
+                sh """
+                    # Если деплоймента еще нет в OpenShift — создаем его один раз
+                    kubectl get deployment/sber-monitoring -n ${env.MY_NAMESPACE} >/dev/null 2>&1 || {
+                        kubectl create deployment sber-monitoring --image=python:3.9-slim -n ${env.MY_NAMESPACE} -- /bin/sh -c "python /code/calc.py"
+                        kubectl expose deployment sber-monitoring --port=3000 --target-port=3000 -n ${env.MY_NAMESPACE}
+                        kubectl set volume deployment/sber-monitoring --add --name=code-volume --type=configmap --configmap-name=code-sber --mount-path=/code -n ${env.MY_NAMESPACE}
+                    }
+                    
+                    # Накатываем актуальные переменные
+                    kubectl set env deployment/sber-monitoring DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} -n ${env.MY_NAMESPACE} --overwrite
+                """
+            }
+        }
+        stage("6. Проверка деплоя") {
+            steps {
+                echo "=== Ожидание готовности подов ==="
+                sh """
+                    kubectl rollout restart deployment/sber-monitoring -n ${env.MY_NAMESPACE}
                     kubectl rollout status deployment/sber-monitoring --timeout=120s -n ${env.MY_NAMESPACE}
                 """
             }
@@ -140,11 +122,8 @@ CMD ["python3", "calc.py"]
     }
     post {
         success {
-            sh """
-                echo "=== СБОРКА УСПЕШНА ==="
-                echo "Сайт: http://172.20.0.3:3000"
-                echo "Версия: ${APP_VERSION}"
-            """
+            echo "=== СБОРКА УСПЕШНА ==="
+            echo "Версия: ${APP_VERSION}"
         }
     }
 }
