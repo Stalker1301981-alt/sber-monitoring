@@ -6,19 +6,18 @@ pipeline {
         timestamps()
     }
     environment {
-        // --- ДАННЫЕ ВАШЕГО OPENSHIFT CLUSTER ---
+        // --- ДАННЫЕ ТВОЕГО OPENSHIFT CLUSTER ---
         OPENSHIFT_API = 'https://openshiftapps.com'
         OS_TOKEN = 'sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4'
         MY_NAMESPACE = "kovaliov2700-dev"
 
-        // --- ВАШИ ОРИГИНАЛЬНЫЕ НАСТРОЙКИ ---
+        // --- ТВОИ ОРИГИНАЛЬНЫЕ НАСТРОЙКИ ---
         APP_VERSION = "${BUILD_NUMBER}"
         REGISTRY = "k3d-sber-registry:5000"
         IMAGE = "${REGISTRY}/sber-monitoring:${BUILD_NUMBER}"
         IMAGE_LATEST = "${REGISTRY}/sber-monitoring:latest"
         DRUID_HOST = "druid-broker.infra.svc.cluster.local"
         DRUID_PORT = "8082"
-        // Секретка GIT_TOKEN удалена, чтобы не вызывать ошибку Jenkins
     }
     stages {
         stage("1. Подготовка кода") {
@@ -78,8 +77,10 @@ CMD ["python3", "calc.py"]
             steps {
                 echo "=== Kaniko build & push ==="
                 sh """
-                    mkdir -p /kaniko/.docker
-                    echo '{}' > /kaniko/.docker/config.json
+                    # Создаем конфиг локально в рабочей папке Jenkins, а не в корне системы
+                    mkdir -p .docker
+                    echo '{}' > .docker/config.json
+                    
                     /usr/local/bin/executor \
                         --context=${WORKSPACE} \
                         --dockerfile=${WORKSPACE}/Dockerfile \
@@ -98,7 +99,6 @@ CMD ["python3", "calc.py"]
                     git config user.name "Jenkins CI"
                     git add k8s/deployment.yaml
                     git commit -m "Update image tag to ${BUILD_NUMBER}" || true
-                    # Пушим без токена, так как репозиторий публичный и у Jenkins есть права доступа к агенту
                     git push origin main
                 """
             }
@@ -116,13 +116,12 @@ CMD ["python3", "calc.py"]
             steps {
                 echo "=== Проверка статуса в облаке OpenShift ==="
                 sh """
-                    # Авторизуем kubectl во внешнем облаке OpenShift перед проверкой rollout status
+                    # Логин в твой живой OpenShift для контроля раскатки
                     kubectl config set-cluster sandbox --server=${env.OPENSHIFT_API} --insecure-skip-tls-verify=true
                     kubectl config set-credentials jenkins --token=${env.OS_TOKEN}
                     kubectl config set-context sandbox --cluster=sandbox --user=jenkins --namespace=${env.MY_NAMESPACE}
                     kubectl config use-context sandbox
                     
-                    # Проверяем деплоймент в вашей личной песочнице
                     kubectl rollout status deployment/sber-monitoring --timeout=120s -n ${env.MY_NAMESPACE}
                 """
             }
