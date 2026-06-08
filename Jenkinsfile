@@ -6,8 +6,16 @@ pipeline {
         timestamps()
     }
     environment {
-        URL_TEST = "https://openshiftapps.com"
-        URL_PROD = "https://openshiftapps.com"
+        // --- РЕАЛЬНЫЕ НАСТРОЙКИ КЛАСТЕРА OPENSHIFT ---
+        OPENSHIFT_API = 'https://api.rm3.7wse.p1.openshiftapps.com:6443'
+        OPENSHIFT_CREDENTIALS_ID = 'openshift-token' // Сюда подставится твой токен sha256~... из Credentials
+        
+        // --- НАСТРОЙКИ ПРОЕКТОВ (ПРОСТРАНСТВ ИМЕН) ---
+        PROJECT_TEST = "sber-monitoring-test"
+        PROJECT_PROD = "sber-monitoring-prod"
+        
+        // --- ПАРАМЕТРЫ ПРИЛОЖЕНИЯ ---
+        APP_NAME = "sber-monitoring"
         APP_VERSION = "2.0"
         DRUID_HOST = "druid-broker.infra.svc.cluster.local"
         DRUID_PORT = "8082"
@@ -47,45 +55,99 @@ class TestSberMonitoring(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 """
+                    // Создаем Dockerfile "на лету" под твой Python веб-сервер
+                    writeFile file: "Dockerfile", text: """FROM python:3.9-slim
+WORKDIR /app
+COPY calc.py .
+EXPOSE 8080
+CMD ["python", "calc.py"]
+"""
                 }
                 sh "rm -rf __pycache__"
                 sh "ls -la"
             }
         }
+        
         stage("2. Предварительное тестирование") {
             steps {
                 echo "=== Запуск тестов ==="
                 sh "python3 test_calc.py"
             }
         }
+        
         stage("3. Деплой на ТЕСТ") {
             steps {
-                echo "=== Деплой: sber-monitoring-test ==="
-            }
-        }
-        stage("3.1 Проверка ТЕСТА") {
-            steps {
-                catchError(buildResult: "SUCCESS", stageResult: "FAILURE") {
-                    sh "curl -k --fail --connect-timeout 5 --retry 2 ${env.URL_TEST}"
+                echo "=== Деплой: ${env.APP_NAME} в тестовый проект ${env.PROJECT_TEST} ==="
+                withCredentials([string(credentialsId: env.OPENSHIFT_CREDENTIALS_ID, variable: 'OS_TOKEN')]) {
+                    sh """
+                        # Логин в твой кластер
+                        oc login ${env.OPENSHIFT_API} --token=${OS_TOKEN} --insecure-skip-tls-verify
+                        oc project ${env.PROJECT_TEST}
+                        
+                        # Запуск сборки Docker-образа внутри OpenShift
+                        oc start-build ${env.APP_NAME}-bc --from-dir=. --follow
+                        
+                        # Передача переменных окружения во внутренний контейнер
+                        oc set env deployment/${env.APP_NAME} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} --overwrite
+                    """
                 }
             }
         }
+        
+        stage("3.1 Проверка ТЕСТА") {
+            steps {
+                catchError(buildResult: "SUCCESS", stageResult: "FAILURE") {
+                    withCredentials([string(credentialsId: env.OPENSHIFT_CREDENTIALS_ID, variable: 'OS_TOKEN')]) {
+                        script {
+                            sh "oc login ${env.OPENSHIFT_API} --token=${OS_TOKEN} --insecure-skip-tls-verify"
+                            // Получаем настоящий сгенерированный роут вида *.openshiftapps.com
+                            def testHost = sh(script: "oc get route ${env.APP_NAME} -n ${env.PROJECT_TEST} -o jsonpath='{.spec.host}'", returnStdout: true).trim()
+                            echo "=== Проверяем живой URL теста: http://${testHost} ==="
+                            
+                            sh "curl -k --fail --connect-timeout 5 --retry 2 http://${testHost}"
+                        }
+                    }
+                }
+            }
+        }
+        
         stage("4. Ожидание одобрения") {
             options { timeout(time: 1, unit: "DAYS") }
             steps {
                 script {
-                    input message: "Отправить версию ${env.APP_VERSION} на боевой?",
+                    input message: "Отправить версию ${env.APP_VERSION} на боевой (PROD)?",
                         ok: "Да, выкатываем!"
                 }
             }
         }
+        
         stage("5. Деплой на ОСНОВУ") {
-            steps { echo "=== Деплой: sber-monitoring2 ===" }
+            steps {
+                echo "=== Деплой: ${env.APP_NAME} на ОСНОВУ (PROD) в проект ${env.PROJECT_PROD} ==="
+                withCredentials([string(credentialsId: env.OPENSHIFT_CREDENTIALS_ID, variable: 'OS_TOKEN')]) {
+                    sh """
+                        oc login ${env.OPENSHIFT_API} --token=${OS_TOKEN} --insecure-skip-tls-verify
+                        oc project ${env.PROJECT_PROD}
+                        
+                        oc start-build ${env.APP_NAME}-bc --from-dir=. --follow
+                        oc set env deployment/${env.APP_NAME} DRUID_HOST=${env.DRUID_HOST} DRUID_PORT=${env.DRUID_PORT} APP_VERSION=${env.APP_VERSION} --overwrite
+                    """
+                }
+            }
         }
+        
         stage("5.1 Проверка ОСНОВЫ") {
             steps {
                 catchError(buildResult: "SUCCESS", stageResult: "FAILURE") {
-                    sh "curl -k --fail --connect-timeout 5 --retry 2 ${env.URL_PROD}"
+                    withCredentials([string(credentialsId: env.OPENSHIFT_CREDENTIALS_ID, variable: 'OS_TOKEN')]) {
+                        script {
+                            sh "oc login ${env.OPENSHIFT_API} --token=${OS_TOKEN} --insecure-skip-tls-verify"
+                            def prodHost = sh(script: "oc get route ${env.APP_NAME} -n ${env.PROJECT_PROD} -o jsonpath='{.spec.host}'", returnStdout: true).trim()
+                            echo "=== Проверяем живой URL прод-контура: http://${prodHost} ==="
+                            
+                            sh "curl -k --fail --connect-timeout 5 --retry 2 http://${prodHost}"
+                        }
+                    }
                 }
             }
         }
