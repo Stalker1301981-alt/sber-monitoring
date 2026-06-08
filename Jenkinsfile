@@ -5,6 +5,15 @@ pipeline {
         timeout(time: 2, unit: "HOURS")
         timestamps()
     }
+    environment {
+        APP_VERSION = "${BUILD_NUMBER}"
+        REGISTRY = "k3d-sber-registry:5000"
+        IMAGE = "${REGISTRY}/sber-monitoring:${BUILD_NUMBER}"
+        IMAGE_LATEST = "${REGISTRY}/sber-monitoring:latest"
+        DRUID_HOST = "druid-broker.infra.svc.cluster.local"
+        DRUID_PORT = "8082"
+        GIT_TOKEN = credentials('github-token')
+    }
     stages {
         stage("1. Подготовка кода") {
             steps {
@@ -13,18 +22,20 @@ pipeline {
                 script {
                     writeFile file: "calc.py", text: """from http.server import BaseHTTPRequestHandler, HTTPServer
 import os, sys
-APP_VERSION = "2.0"
-DRUID_HOST = os.environ.get("DRUID_HOST", "druid-broker.infra.svc.cluster.local")
-DRUID_PORT = int(os.environ.get("DRUID_PORT", 8082))
+APP_VERSION = '${env.APP_VERSION}'
+DRUID_HOST = os.environ.get('DRUID_HOST', '${env.DRUID_HOST}')
+DRUID_PORT = int(os.environ.get('DRUID_PORT', ${env.DRUID_PORT}))
 class SberMonitoringWebsite(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header("Content-type", "text/html; charset=utf-8")
+        self.send_header('Content-type', 'text/html; charset=utf-8')
         self.end_headers()
-        html = f"<h1>Сбер-Мониторинг v{APP_VERSION}</h1><p>Связь с Apache Druid: {DRUID_HOST}:{DRUID_PORT}</p>"
-        self.wfile.write(html.encode("utf-8"))
-if __name__ == "__main__":
-    server_address = ("0.0.0.0", 3000)
+        html = '<h1>Сбер-Мониторинг v' + APP_VERSION + '</h1>'
+        html += '<p>Druid: ' + DRUID_HOST + ':' + str(DRUID_PORT) + '</p>'
+        html += '<p>Build: ' + os.environ.get('BUILD_URL', 'local') + '</p>'
+        self.wfile.write(html.encode('utf-8'))
+if __name__ == '__main__':
+    server_address = ('0.0.0.0', 3000)
     httpd = HTTPServer(server_address, SberMonitoringWebsite)
     sys.stdout.flush()
     httpd.serve_forever()
@@ -37,78 +48,74 @@ class TestSberMonitoring(unittest.TestCase):
         self.assertTrue(len(APP_VERSION) > 0)
     def test_website_class_exists(self):
         self.assertTrue(issubclass(SberMonitoringWebsite, object))
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()
+"""
+                    writeFile file: "Dockerfile", text: """FROM python:3-slim
+WORKDIR /app
+COPY calc.py .
+EXPOSE 3000
+CMD ["python3", "calc.py"]
 """
                 }
                 sh "rm -rf __pycache__"
                 sh "ls -la"
             }
         }
-        
         stage("2. Тестирование") {
             steps {
                 echo "=== Запуск тестов ==="
                 sh "python3 test_calc.py"
             }
         }
-        
-        stage("3. Сборка образа в OpenShift") {
+        stage("3. Сборка Docker образа") {
             steps {
-                echo "=== Сборка силами OpenShift (S2I) ==="
-                // Прямой жесткий текст без переменных Jenkins, чтобы избежать багов интерполяции
+                echo "=== Kaniko build & push ==="
                 sh """
-                    kubectl config set-cluster sandbox --server=https://openshiftapps.com --insecure-skip-tls-verify=true
-                    kubectl config set-credentials jenkins --token=sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4
-                    kubectl config set-context sandbox --cluster=sandbox --user=jenkins --namespace=kovaliov2700-dev
-                    kubectl config use-context sandbox
-                    
-                    kubectl delete configmap code-sber -n kovaliov2700-dev --ignore-not-found
-                    kubectl create configmap code-sber --from-file=calc.py -n kovaliov2700-dev
+                    mkdir -p /kaniko/.docker
+                    echo '{}' > /kaniko/.docker/config.json
+                    /usr/local/bin/executor \
+                        --context=${WORKSPACE} \
+                        --dockerfile=${WORKSPACE}/Dockerfile \
+                        --destination=${IMAGE} \
+                        --destination=${IMAGE_LATEST} \
+                        --force --skip-tls-verify \
+                        --insecure --insecure-registry=${REGISTRY}
                 """
             }
         }
-        
-        stage("4. Обновление манифестов") {
+        stage("4. Обновление Git манифестов") {
             steps {
-                echo "=== Пропуск локального деплоя ==="
+                sh """
+                    sed -i 's|image: .*|image: ${IMAGE}|' ${WORKSPACE}/k8s/deployment.yaml
+                    git config user.email "jenkins@sber-monitoring"
+                    git config user.name "Jenkins CI"
+                    git add k8s/deployment.yaml
+                    git commit -m "Update image tag to ${BUILD_NUMBER}" || true
+                    git remote set-url origin https://Stalker1301981-alt:${GIT_TOKEN}@://github.com
+                    git push origin main
+                """
             }
         }
-        
         stage("5. Деплой через ArgoCD") {
             steps {
-                echo "=== Синхронизация ресурсов в OpenShift ==="
+                echo "=== ArgoCD sync ==="
                 sh """
-                    kubectl config use-context sandbox
-                    
-                    kubectl get deployment/sber-monitoring -n kovaliov2700-dev >/dev/null 2>&1 || {
-                        echo "Инициализация деплоймента..."
-                        kubectl create deployment sber-monitoring --image=python:3.9-slim -n kovaliov2700-dev -- /bin/sh -c "python /code/calc.py"
-                        kubectl expose deployment sber-monitoring --port=3000 --target-port=3000 -n kovaliov2700-dev
-                        kubectl set volume deployment/sber-monitoring --add --name=code-volume --type=configmap --configmap-name=code-sber --mount-path=/code -n kovaliov2700-dev
-                    }
-                    
-                    kubectl set env deployment/sber-monitoring DRUID_HOST=druid-broker.infra.svc.cluster.local DRUID_PORT=8082 APP_VERSION=2.0 -n kovaliov2700-dev --overwrite
+                    argocd login localhost:8443 --username admin --password my3Somy9Mwkmp7fN --insecure
+                    argocd app sync sber-monitoring --grpc-web
                 """
             }
         }
-        
         stage("6. Проверка деплоя") {
             steps {
-                echo "=== Ожидание готовности подов ==="
-                sh """
-                    kubectl config use-context sandbox
-                    kubectl rollout restart deployment/sber-monitoring -n kovaliov2700-dev
-                    kubectl rollout status deployment/sber-monitoring --timeout=120s -n kovaliov2700-dev
-                """
+                sh "kubectl rollout status deployment/sber-monitoring --timeout=120s"
             }
         }
-        
         stage("7. Ожидание одобрения") {
             options { timeout(time: 1, unit: "DAYS") }
             steps {
                 script {
-                    input message: "Отправить версию на боевой?",
+                    input message: "Отправить версию ${env.APP_VERSION} на боевой?",
                         ok: "Да, выкатываем!"
                 }
             }
@@ -116,7 +123,11 @@ if __name__ == "__main__":
     }
     post {
         success {
-            echo "=== СБОРКА УСПЕШНА ==="
+            sh """
+                echo "=== СБОРКА УСПЕШНА ==="
+                echo "Сайт: http://172.20.0.3:3000"
+                echo "Версия: ${APP_VERSION}"
+            """
         }
     }
 }
