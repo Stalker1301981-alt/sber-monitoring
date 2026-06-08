@@ -5,14 +5,6 @@ pipeline {
         timeout(time: 2, unit: "HOURS")
         timestamps()
     }
-    environment {
-        MY_NAMESPACE = "kovaliov2700-dev"
-        APP_TEST = "sber-monitoring-test"
-        APP_PROD = "sber-monitoring-prod"
-        APP_VERSION = "2.0"
-        DRUID_HOST = "druid-broker.infra.svc.cluster.local"
-        DRUID_PORT = "8082"
-    }
     stages {
         stage("1. Подготовка кода") {
             steps {
@@ -21,9 +13,9 @@ pipeline {
                 script {
                     writeFile file: "calc.py", text: """from http.server import BaseHTTPRequestHandler, HTTPServer
 import os, sys
-APP_VERSION = "${env.APP_VERSION}"
-DRUID_HOST = os.environ.get("DRUID_HOST", "${env.DRUID_HOST}")
-DRUID_PORT = int(os.environ.get("DRUID_PORT", ${env.DRUID_PORT}))
+APP_VERSION = "2.0"
+DRUID_HOST = os.environ.get("DRUID_HOST", "druid-broker.infra.svc.cluster.local")
+DRUID_PORT = int(os.environ.get("DRUID_PORT", 8082))
 class SberMonitoringWebsite(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -65,7 +57,7 @@ if __name__ == "__main__":
             steps {
                 echo "=== Деплой ТЕСТ в пространство kovaliov2700-dev ==="
                 sh """
-                    # Жестко указываем твой реальный рабочий URL API OpenShift
+                    # Жестко прописан твой реальный API сервер
                     kubectl config set-cluster sandbox --server=https://openshiftapps.com --insecure-skip-tls-verify=true
                     kubectl config set-credentials jenkins --token=sha256~8HuHBQoZDsixfl8vKxOAvuh8Q5vT8U4wWxZzizberE4
                     kubectl config set-context sandbox --cluster=sandbox --user=jenkins --namespace=kovaliov2700-dev
@@ -81,11 +73,11 @@ if __name__ == "__main__":
                         kubectl create deployment sber-monitoring-test --image=python:3.9-slim -n kovaliov2700-dev -- /bin/sh -c "python /code/calc.py"
                         kubectl expose deployment sber-monitoring-test --port=8080 --target-port=8080 -n kovaliov2700-dev
                         
-                        # Монтируем код внутрь контейнера
+                        # Подключаем паку с кодом
                         kubectl set volume deployment/sber-monitoring-test --add --name=code-volume --type=configmap --configmap-name=code-test --mount-path=/code -n kovaliov2700-dev
                     }
                     
-                    # Обновляем переменные и перезапускаем поды
+                    # Обновляем переменные и перезапускаем поды для применения нового кода
                     kubectl set env deployment/sber-monitoring-test DRUID_HOST=druid-broker.infra.svc.cluster.local DRUID_PORT=8082 APP_VERSION=2.0 -n kovaliov2700-dev --overwrite
                     kubectl rollout restart deployment/sber-monitoring-test -n kovaliov2700-dev
                 """
