@@ -23,7 +23,6 @@ spec:
           name: http
         - containerPort: 8000
           name: metrics
-        imagePullPolicy: Always
         env:
         - name: DRUID_HOST
           value: "druid-broker.infra.svc.cluster.local"
@@ -59,7 +58,6 @@ spec:
           name: http
         - containerPort: 8000
           name: metrics
-        imagePullPolicy: Always
         env:
         - name: DRUID_HOST
           value: "druid-broker.infra.svc.cluster.local"
