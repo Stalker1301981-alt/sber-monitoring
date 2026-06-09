@@ -87,7 +87,26 @@ data:
           ],
           "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
         }
-      ],
+      ],        {
+          "title": "Disk Usage",
+          "type": "gauge",
+          "targets": [
+            {
+              "expr": "disk_usage_percent",
+              "legendFormat": "disk %"
+            }
+          ],
+          "gridPos": {"h": 6, "w": 6, "x": 0, "y": 16},
+          "options": {
+            "min": 0,
+            "max": 100,
+            "thresholds": [
+              {"color": "green", "value": null},
+              {"color": "orange", "value": 80},
+              {"color": "red", "value": 90}
+            ]
+          }
+        },
       "schemaVersion": 22,
       "version": 1
     }
