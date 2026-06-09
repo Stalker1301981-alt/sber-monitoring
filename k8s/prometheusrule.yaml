@@ -1,0 +1,46 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: sber-monitoring-alerts
+  namespace: kovaliov2700-dev
+  labels:
+    app: sber-monitoring
+spec:
+  groups:
+  - name: sber-monitoring
+    rules:
+    - alert: AppDown
+      expr: up{app="sber-monitoring-prod"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Sber-Monitoring PROD is down"
+        description: "Pod {{ $labels.pod }} has been down for more than 1 minute."
+
+    - alert: HighErrorRate
+      expr: rate(app_requests_total{method="GET"}[5m]) > 100
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High request rate on Sber-Monitoring"
+        description: "Request rate is {{ $value }} req/s on pod {{ $labels.pod }}"
+
+    - alert: AppDownTest
+      expr: up{app="sber-monitoring-test"} == 0
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Sber-Monitoring TEST is down"
+        description: "Test pod {{ $labels.pod }} has been down for more than 2 minutes."
+
+    - alert: PodRestarts
+      expr: rate(kube_pod_container_status_restarts_total{namespace="kovaliov2700-dev"}[10m]) > 1
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Pod restart detected"
+        description: "Pod {{ $labels.pod }} restart rate is {{ $value }}"
