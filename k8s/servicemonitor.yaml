@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: sber-monitoring
+  namespace: kovaliov2700-dev
+  labels:
+    app: sber-monitoring
+spec:
+  selector:
+    matchLabels:
+      app: sber-monitoring-prod
+  endpoints:
+  - port: metrics
+    interval: 15s
+    path: /metrics
+  namespaceSelector:
+    matchNames:
+    - kovaliov2700-dev
