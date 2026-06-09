@@ -39,76 +39,46 @@ metadata:
     grafana_dashboard: "true"
 data:
   sber-monitoring-dashboard.json: |
-    {
+        {
       "title": "Sber Monitoring",
       "tags": ["sber-monitoring"],
       "panels": [
         {
           "title": "Request Rate",
           "type": "graph",
-          "targets": [
-            {
-              "expr": "rate(app_requests_total[1m])",
-              "legendFormat": "{{method}} {{path}}"
-            }
-          ],
+          "targets": [{"expr": "rate(app_requests_total[1m])", "legendFormat": "{{method}} {{path}}"}],
           "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
         },
         {
           "title": "Active Requests",
           "type": "graph",
-          "targets": [
-            {
-              "expr": "app_active_requests",
-              "legendFormat": "active requests"
-            }
-          ],
+          "targets": [{"expr": "app_active_requests", "legendFormat": "active requests"}],
           "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
         },
         {
           "title": "App Info",
           "type": "stat",
-          "targets": [
-            {
-              "expr": "app_info",
-              "legendFormat": "version {{version}}"
-            }
-          ],
+          "targets": [{"expr": "app_info", "legendFormat": "version {{version}}"}],
           "gridPos": {"h": 4, "w": 12, "x": 0, "y": 8}
         },
         {
           "title": "Pod Status",
           "type": "table",
-          "targets": [
-            {
-              "expr": "up",
-              "legendFormat": "{{app}} {{instance}}"
-            }
-          ],
+          "targets": [{"expr": "up", "legendFormat": "{{app}} {{instance}}"}],
           "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
-        }
-      ],        {
+        },
+        {
           "title": "Disk Usage",
           "type": "gauge",
-          "targets": [
-            {
-              "expr": "disk_usage_percent",
-              "legendFormat": "disk %"
-            }
-             "title": "Disk Usage",      ← новая панель
-          "type": "gauge",
-          ],
+          "targets": [{"expr": "disk_usage_percent", "legendFormat": "disk %"}],
           "gridPos": {"h": 6, "w": 6, "x": 0, "y": 16},
-          "options": {
-            "min": 0,
-            "max": 100,
-            "thresholds": [
-              {"color": "green", "value": null},
-              {"color": "orange", "value": 80},
-              {"color": "red", "value": 90}
-            ]
-          }
-        },
+          "options": {"min": 0, "max": 100, "thresholds": [
+            {"color": "green", "value": null},
+            {"color": "orange", "value": 80},
+            {"color": "red", "value": 90}
+          ]}
+        }
+      ],
       "schemaVersion": 22,
       "version": 1
     }
