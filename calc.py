@@ -20,7 +20,7 @@ class SberMonitoringWebsite(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-type', 'text/html; charset=utf-8')
         self.end_headers()
-        html = '<h1>Сбер-Мониторинг v' + APP_VERSION + '</h1>'
+        html = '<h1>Сбер-Мониторинг v' + APP_VERSION + ' 🔥</h1>'
         html += '<p>Druid: ' + DRUID_HOST + ':' + str(DRUID_PORT) + '</p>'
         html += '<p>Build: ' + BUILD_URL + '</p>'
         self.wfile.write(html.encode('utf-8'))
