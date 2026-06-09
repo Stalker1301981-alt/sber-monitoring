@@ -95,6 +95,8 @@ data:
               "expr": "disk_usage_percent",
               "legendFormat": "disk %"
             }
+             "title": "Disk Usage",      ← новая панель
+          "type": "gauge",
           ],
           "gridPos": {"h": 6, "w": 6, "x": 0, "y": 16},
           "options": {
