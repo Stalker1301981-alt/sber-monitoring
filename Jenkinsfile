@@ -32,10 +32,12 @@ pipeline {
                 """
             }
         }
-        stage('Apply K8s Manifests') {
+        stage('Apply K8s Core') {
             steps {
                 sh """
-                    oc apply -f k8s/ -n ${NAMESPACE}
+                    oc apply -f k8s/deployment.yaml -n ${NAMESPACE}
+                    oc apply -f k8s/service.yaml -n ${NAMESPACE}
+                    oc apply -f k8s/route.yaml -n ${NAMESPACE}
                 """
             }
         }
