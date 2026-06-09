@@ -1,13 +1,18 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: sber-monitoring-service
-  namespace: kovaliov2700-dev # Явно указываем ваш проект
+  name: sber-monitoring
+  namespace: kovaliov2700-dev
+  labels:
+    app: sber-monitoring-prod
 spec:
   selector:
-    app: sber-monitoring-prod # Должно строго совпадать с labels.app из вашего Deployment
+    app: sber-monitoring-prod
   ports:
-    - name: http
-      port: 3000       # Внутренний порт для связи внутри кластера
-      targetPort: 3000 # Порт, на котором запускается ваш файл calk (был 3000)
-  type: ClusterIP      # Стандартный тип для OpenShift. LoadBalancer здесь не нужен
+  - name: http
+    port: 8080
+    targetPort: 8080
+  - name: metrics
+    port: 8000
+    targetPort: 8000
+  type: ClusterIP
