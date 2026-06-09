@@ -1,50 +1,71 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: sber-monitoring
-  namespace: kovaliov2700-dev # Явно указываем целевой проект
+  name: sber-monitoring-test
+  namespace: kovaliov2700-dev
   labels:
-    app: sber-monitoring
+    app: sber-monitoring-test
 spec:
-  replicas: 2
+  replicas: 0
   selector:
     matchLabels:
-      app: sber-monitoring
+      app: sber-monitoring-test
   template:
     metadata:
       labels:
-        app: sber-monitoring
+        app: sber-monitoring-test
     spec:
       containers:
       - name: app
-        image: k3d-sber-registry:5000/sber-monitoring:latest
+        image: image-registry.openshift-image-registry.svc:5000/kovaliov2700-dev/sber-monitoring:latest
         ports:
-        - containerPort: 3000
-        imagePullPolicy: IfNotPresent
+        - containerPort: 8080
+          name: http
+        - containerPort: 8000
+          name: metrics
+        imagePullPolicy: Always
+        env:
+        - name: DRUID_HOST
+          value: "druid-broker.infra.svc.cluster.local"
+        - name: DRUID_PORT
+          value: "8082"
+        - name: APP_VERSION
+          value: ""
+        - name: BUILD_URL
+          value: ""
 ---
-apiVersion: v1
-kind: Service
+apiVersion: apps/v1
+kind: Deployment
 metadata:
-  name: sber-monitoring
+  name: sber-monitoring-prod
   namespace: kovaliov2700-dev
+  labels:
+    app: sber-monitoring-prod
 spec:
+  replicas: 0
   selector:
-    app: sber-monitoring # Идеально совпадает с селектором Deployment
-  ports:
-  - name: http
-    port: 3000       # Внутренний порт сервиса
-    targetPort: 3000 # Ведёт на порт 3000 вашего приложения
-  type: ClusterIP    # Стандартный внутренний IP для OpenShift
----
-apiVersion: route.openshift.io/v1
-kind: Route
-metadata:
-  name: sber-monitoring
-  namespace: kovaliov2700-dev
-spec:
-  to:
-    kind: Service
-    name: sber-monitoring # Перенаправляет трафик на сервис выше
-    weight: 100
-  port:
-    targetPort: http # Название порта из секции Service.ports
+    matchLabels:
+      app: sber-monitoring-prod
+  template:
+    metadata:
+      labels:
+        app: sber-monitoring-prod
+    spec:
+      containers:
+      - name: app
+        image: image-registry.openshift-image-registry.svc:5000/kovaliov2700-dev/sber-monitoring:latest
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 8000
+          name: metrics
+        imagePullPolicy: Always
+        env:
+        - name: DRUID_HOST
+          value: "druid-broker.infra.svc.cluster.local"
+        - name: DRUID_PORT
+          value: "8082"
+        - name: APP_VERSION
+          value: ""
+        - name: BUILD_URL
+          value: ""
