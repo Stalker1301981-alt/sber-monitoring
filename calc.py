@@ -1,10 +1,12 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import os, sys, threading
 from prometheus_client import start_http_server, Counter, Gauge, generate_latest
+import psutil
 
 REQUESTS = Counter('app_requests_total', 'Total requests', ['method', 'path'])
 APP_INFO = Gauge('app_info', 'App version info', ['version'])
 ACTIVE_REQUESTS = Gauge('app_active_requests', 'Currently active requests')
+DISK = Gauge('disk_usage_percent', 'Disk usage % on root FS')
 
 APP_VERSION = os.environ.get('APP_VERSION', '1')
 DRUID_HOST = os.environ.get('DRUID_HOST', 'druid-broker.infra.svc.cluster.local')
@@ -23,7 +25,8 @@ class SberMonitoringWebsite(BaseHTTPRequestHandler):
         html = '<h1>Сбер-Мониторинг v' + APP_VERSION + ' 🔥</h1>'
         html += '<p>Druid: ' + DRUID_HOST + ':' + str(DRUID_PORT) + '</p>'
         html += '<p>Build: ' + BUILD_URL + '</p>'
-        self.wfile.write(html.encode('utf-8'))
+                self.wfile.write(html.encode('utf-8'))
+        DISK.set(psutil.disk_usage('/').percent)
         ACTIVE_REQUESTS.dec()
 
 if __name__ == '__main__':
