@@ -41,6 +41,27 @@ data:
         annotations:
           summary: "High request rate on Sber-Monitoring"
           description: "Request rate is {{ $value }} req/s"
+                - alert: HighErrorRate
+        expr: rate(app_requests_total...)
+        ...
+        annotations:
+          description: "Request rate is {{ $value }} req/s"
+      - alert: DiskUsageHigh           # ← новый
+        expr: disk_usage_percent > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk usage > 80%"
+          description: "Root FS is {{ $value }}% full on pod {{ $labels.instance }}"
+      - alert: DiskUsageCritical       # ← новый
+        expr: disk_usage_percent > 90
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk usage > 90%"
+          description: "Root FS is {{ $value }}% full on pod {{ $labels.instance }}"
 
 ---
 apiVersion: v1
