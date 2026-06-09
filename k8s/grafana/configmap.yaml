@@ -1,0 +1,93 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-config
+  namespace: kovaliov2700-dev
+data:
+  grafana.ini: |
+    [server]
+    root_url = https://grafana-route-kovaliov2700-dev.apps.rm3.7wse.p1.openshiftapps.com
+    [auth]
+    disable_login_form = false
+    [auth.anonymous]
+    enabled = true
+    org_role = Viewer
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: kovaliov2700-dev
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+    - name: Prometheus
+      type: prometheus
+      url: http://prometheus:9090
+      access: proxy
+      isDefault: true
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-sber-monitoring
+  namespace: kovaliov2700-dev
+  labels:
+    grafana_dashboard: "true"
+data:
+  sber-monitoring-dashboard.json: |
+    {
+      "title": "Sber Monitoring",
+      "tags": ["sber-monitoring"],
+      "panels": [
+        {
+          "title": "Request Rate",
+          "type": "graph",
+          "targets": [
+            {
+              "expr": "rate(app_requests_total[1m])",
+              "legendFormat": "{{method}} {{path}}"
+            }
+          ],
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+        },
+        {
+          "title": "Active Requests",
+          "type": "graph",
+          "targets": [
+            {
+              "expr": "app_active_requests",
+              "legendFormat": "active requests"
+            }
+          ],
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+        },
+        {
+          "title": "App Info",
+          "type": "stat",
+          "targets": [
+            {
+              "expr": "app_info",
+              "legendFormat": "version {{version}}"
+            }
+          ],
+          "gridPos": {"h": 4, "w": 12, "x": 0, "y": 8}
+        },
+        {
+          "title": "Pod Status",
+          "type": "table",
+          "targets": [
+            {
+              "expr": "up",
+              "legendFormat": "{{app}} {{instance}}"
+            }
+          ],
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+        }
+      ],
+      "schemaVersion": 22,
+      "version": 1
+    }

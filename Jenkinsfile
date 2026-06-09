@@ -1,5 +1,5 @@
 pipeline {
-    agent any
+    agent { label 'master' }
     options {
         buildDiscarder(logRotator(numToKeepStr: "10"))
         timeout(time: 1, unit: "HOURS")
@@ -7,7 +7,6 @@ pipeline {
     }
     environment {
         OPENSHIFT_API = 'https://api.rm3.7wse.p1.openshiftapps.com:6443'
-        OS_TOKEN = credentials('openshift-token')
         NAMESPACE = 'kovaliov2700-dev'
         APP_NAME = 'sber-monitoring'
         APP_VERSION = "${BUILD_NUMBER}"
@@ -26,10 +25,7 @@ pipeline {
         }
         stage('Login OpenShift') {
             steps {
-                sh """
-                    oc login --token=${OS_TOKEN} --server=${OPENSHIFT_API} --insecure-skip-tls-verify=true
-                    oc project ${NAMESPACE}
-                """
+                sh 'oc project ${NAMESPACE}'
             }
         }
         stage('Apply K8s Core') {
@@ -38,6 +34,19 @@ pipeline {
                     oc apply -f k8s/deployment.yaml -n ${NAMESPACE}
                     oc apply -f k8s/service.yaml -n ${NAMESPACE}
                     oc apply -f k8s/route.yaml -n ${NAMESPACE}
+                """
+            }
+        }
+        stage('Apply Monitoring') {
+            steps {
+                sh """
+                    oc apply -f k8s/servicemonitor.yaml -n ${NAMESPACE} || true
+                    oc apply -f k8s/prometheusrule.yaml -n ${NAMESPACE} || true
+                    oc apply -f k8s/prometheus.yaml -n ${NAMESPACE}
+                    oc apply -f k8s/grafana/configmap.yaml -n ${NAMESPACE}
+                    oc apply -f k8s/grafana/deployment.yaml -n ${NAMESPACE}
+                    oc apply -f k8s/grafana/service.yaml -n ${NAMESPACE}
+                    oc apply -f k8s/grafana/route.yaml -n ${NAMESPACE}
                 """
             }
         }

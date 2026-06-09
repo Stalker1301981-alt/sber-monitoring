@@ -1,0 +1,1256 @@
+<html xmlns:o='urn:schemas-microsoft-com:office:office'
+      xmlns:w='urn:schemas-microsoft-com:office:word'
+      xmlns='http://www.w3.org/TR/REC-html40'>
+<head>
+<meta charset="UTF-8">
+<title>Sber-Monitoring Stack Guide — Полное руководство</title>
+<!--[if gte mso 9]>
+<xml>
+<w:WordDocument>
+<w:View>Print</w:View>
+</w:WordDocument>
+</xml>
+<![endif]-->
+<style>
+body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 11pt; line-height: 1.5; margin: 2cm; }
+h1 { color: #C00; font-size: 20pt; border-bottom: 3px solid #C00; padding-bottom: 8px; }
+h2 { color: #06C; font-size: 15pt; margin-top: 28px; border-bottom: 2px solid #CCC; padding-bottom: 4px; }
+h3 { color: #333; font-size: 12pt; margin-top: 20px; }
+h4 { color: #555; font-size: 11pt; margin-top: 14px; }
+code { background: #F0F0F0; padding: 1px 5px; border-radius: 3px; font-family: Consolas, monospace; font-size: 10pt; }
+pre { background: #F5F5F5; border: 1px solid #DDD; padding: 12px; border-radius: 4px; font-family: Consolas, monospace; font-size: 9pt; overflow-x: auto; white-space: pre-wrap; }
+table { border-collapse: collapse; width: 100%; margin: 12px 0; }
+th, td { border: 1px solid #CCC; padding: 6px 10px; text-align: left; vertical-align: top; }
+th { background: #06C; color: white; }
+.note { background: #FFF3CD; border: 1px solid #FFC107; padding: 10px; border-radius: 4px; margin: 12px 0; }
+.warn { background: #F8D7DA; border: 1px solid #F5C6CB; padding: 10px; border-radius: 4px; margin: 12px 0; }
+.ok { background: #D4EDDA; border: 1px solid #C3E6CB; padding: 10px; border-radius: 4px; margin: 12px 0; }
+ul, ol { margin-top: 4px; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+
+<h1>Полное руководство: Sber-Monitoring Stack в OpenShift</h1>
+
+<div class="ok">
+<b>Кластер:</b> https://api.rm3.7wse.p1.openshiftapps.com:6443<br>
+<b>Пользователь:</b> kovaliov2700<br>
+<b>Namespace:</b> kovaliov2700-dev<br>
+<b>Дата:</b> Июнь 2026
+</div>
+
+<!-- ================================================================ -->
+<h2>1. Что мы строим — полная архитектура</h2>
+
+<p>Мы создаём CI/CD конвейер для Python-приложения "Sber-Monitoring" в OpenShift DevSandbox.
+Вот как всё связано:</p>
+
+<pre>
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                          1. GitHub (исходный код)                                     │
+│  https://github.com/Stalker1301981-alt/sber-monitoring                                │
+│  ┌────────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────────────┐    │
+│  │ Jenkinsfile │  │ calc.py  │  │Dockerfile│  │test_app  │  │ k8s/*.yaml        │    │
+│  │ (CI/CD      │  │ (сервер) │  │(образ)   │  │ .py      │  │ (манифесты)      │    │
+│  │  pipeline)  │  │          │  │          │  │ (тесты)  │  │                   │    │
+│  └────────────┘  └──────────┘  └──────────┘  └──────────┘  └───────────────────┘    │
+└──────────────────────────┬───────────────────────────────────────────────────────────┘
+                           │
+               git push (через webhook)
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                     2. Jenkins (CI/CD сервер)                                        │
+│  https://jenkins-kovaliov2700-dev.apps.rm3.7wse.p1.openshiftapps.com                  │
+│                                                                                       │
+│  Pipeline "sber-monitoring" выполняет по порядку:                                     │
+│                                                                                       │
+│  ┌──────────┐  ┌──────┐  ┌──────────┐  ┌──────────────┐  ┌──────────┐               │
+│  │Checkout  │→ │ Test │→ │Login OCP │→ │Apply K8s Core│→ │Build     │               │
+│  │(Git clone)│  │(pytest│  │(oc login)│  │(deployment, │  │Image     │               │
+│  │          │  │unit   │  │          │  │ service,     │  │(Docker   │               │
+│  │          │  │test)  │  │          │  │ route)       │  │ build)   │               │
+│  └──────────┘  └──────┘  └──────────┘  └──────────────┘  └─────┬────┘               │
+│                                                                 │                     │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────────┐│                     │
+│  │Deploy    │← │Approve   │← │Deploy    │←─────────────────────┘                     │
+│  │PROD      │  │(manual)  │  │TEST      │                                            │
+│  │2 replicas│  │          │  │1 replica  │                                            │
+│  └──────────┘  └──────────┘  └──────────┘                                            │
+└──────────────────────────────────┬───────────────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                     3. OpenShift (оркестратор контейнеров)                           │
+│                                                                                       │
+│  ┌───────────────────────────────────────────────────────────────────────────────┐   │
+│  │ 3a. BuildConfig + ImageStream (сборка образа)                                 │   │
+│  │  oc new-build --name=sber-monitoring --binary --strategy=docker               │   │
+│  │  oc start-build sber-monitoring --from-dir=. --wait                           │   │
+│  │  Результат: image-registry.../kovaliov2700-dev/sber-monitoring:latest         │   │
+│  └───────────────────────────────────────────────────────────────────────────────┘   │
+│                                   │                                                    │
+│                                   ▼                                                    │
+│  ┌───────────────────────────────────────────────────────────────────────────────┐   │
+│  │ 3b. Pods (контейнеры с приложением)                                          │   │
+│  │                                                                               │   │
+│  │  ┌─────────────────────────┐  ┌─────────────────────────┐                     │   │
+│  │  │ sber-monitoring-test    │  │ sber-monitoring-prod    │                     │   │
+│  │  │ 1 pod                   │  │ 2 pods                  │                     │   │
+│  │  │ image: python:3.9-slim │  │ image: python:3.9-slim  │                     │   │
+│  │  │ port 8080 — HTTP сервер│  │ port 8080 — HTTP сервер │                     │   │
+│  │  │ port 8000 — /metrics   │  │ port 8000 — /metrics    │                     │   │
+│  │  │ command: pip install +  │  │ command: pip install +   │                     │   │
+│  │  │   python calc.py        │  │   python calc.py         │                     │   │
+│  │  │ env: DRUID_HOST,...     │  │ env: DRUID_HOST,...      │                     │   │
+│  │  └─────────────────────────┘  └─────────────────────────┘                     │   │
+│  └───────────────────────────────────────────────────────────────────────────────┘   │
+│                                   │                                                    │
+│                                   ▼                                                    │
+│  ┌───────────────────────────────────────────────────────────────────────────────┐   │
+│  │ 3c. Service (балансировщик трафика внутри кластера)                          │   │
+│  │                                                                               │   │
+│  │  sber-monitoring (ClusterIP, 172.30.x.x)                                     │   │
+│  │  selector: app=sber-monitoring-prod  ← ВАЖНО: должно совпадать с labels pod   │   │
+│  │  ┌────────┐  ┌──────────┐                                                     │   │
+│  │  │ port   │  │ port     │                                                     │   │
+│  │  │ 8080   │  │ 8000     │                                                     │   │
+│  │  │ http   │  │ metrics  │                                                     │   │
+│  │  └───┬────┘  └────┬─────┘                                                     │   │
+│  │      │             │                                                           │   │
+│  │      ▼             ▼                                                           │   │
+│  │  Браузеры       Prometheus (скрейпинг)                                        │   │
+│  └───────────────────────────────────────────────────────────────────────────────┘   │
+│                                   │                                                    │
+│                                   ▼                                                    │
+│  ┌───────────────────────────────────────────────────────────────────────────────┐   │
+│  │ 3d. Route (вход из интернета)                                                │   │
+│  │                                                                               │   │
+│  │  sber-monitoring-route (edge TLS)                                             │   │
+│  │  https://sber-monitoring-route-kovaliov2700-dev.apps.rm3.7wse.p1...           │   │
+│  │  → Service sber-monitoring:8080                                               │   │
+│  └───────────────────────────────────────────────────────────────────────────────┘   │
+│                                   │                                                    │
+│                                   ▼                                                    │
+│  ┌───────────────────────────────────────────────────────────────────────────────┐   │
+│  │ 3e. Prometheus (сбор метрик)                                                 │   │
+│  │                                                                               │   │
+│  │  Standalone Prometheus (не Operator!)                                         │   │
+│  │  https://prometheus-route...:9090                                             │   │
+│  │                                                                               │   │
+│  │  scrape_configs:                                                              │   │
+│  │    - job: "sber-monitoring" → sber-monitoring:8000 (каждые 15с)              │   │
+│  │    - job: "prometheus" → localhost:9090                                       │   │
+│  │                                                                               │   │
+│  │  rules (алерты):                                                              │   │
+│  │    - AppDown: up == 0 за 1m                                                   │   │
+│  │    - HighErrorRate: rate(app_requests_total[5m]) > 100                        │   │
+│  └───────────────────────────────────────────────────────────────────────────────┘   │
+│                                   │                                                    │
+│                                   ▼                                                    │
+│  ┌───────────────────────────────────────────────────────────────────────────────┐   │
+│  │ 3f. Grafana (визуализация метрик)                                            │   │
+│  │                                                                               │   │
+│  │  https://grafana-route...:3000  (admin / admin123)                            │   │
+│  │                                                                               │   │
+│  │  Datasource: Prometheus → http://prometheus:9090                              │   │
+│  │                                                                               │   │
+│  │  Dashboard "Sber Monitoring":                                                 │   │
+│  │    - Request Rate (rate(app_requests_total[1m]))                              │   │
+│  │    - Active Requests (app_active_requests)                                    │   │
+│  │    - App Info (app_info)                                                      │   │
+│  │    - Pod Status (up)                                                          │   │
+│  └───────────────────────────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────────────────────────┘
+</pre>
+
+<p><b>Ключевое понимание:</b> <code>Service</code> соединяет поды по <b>labels</b>.
+Если у пода label <code>app: sber-monitoring-prod</code>, а Service selector <code>app: sber-monitoring-prod</code> — трафик пойдёт к поду.
+Если labels не совпадают — Service не видит поды!</p>
+
+<!-- ================================================================ -->
+<h2>2. Все файлы проекта — подробный разбор</h2>
+
+<h3>2.1 calc.py — главный сервер</h3>
+<pre>#!/usr/bin/env python3
+import http.server, json, os, threading, time
+from prometheus_client import start_http_server, Counter, Gauge, Info
+
+# Метрики Prometheus:
+requests_total = Counter('app_requests_total', 'Total requests', ['method', 'path', 'status'])
+active_requests = Gauge('app_active_requests', 'Active requests')
+app_info = Info('app_info', 'Application info')
+app_info.info({'version': os.getenv('APP_VERSION', 'dev'), 'build': os.getenv('BUILD_URL', '')})
+
+DRUID_HOST = os.getenv('DRUID_HOST', 'druid-broker.infra.svc.cluster.local')
+DRUID_PORT = os.getenv('DRUID_PORT', '8082')
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        active_requests.inc()
+        if self.path == '/metrics':
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/plain; version=0.0.4')
+            self.end_headers()
+            self.wfile.write(generate_latest().encode())
+        else:
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.end_headers()
+            html = f'''&lt;h1&gt;Сбер-Мониторинг v {os.getenv('APP_VERSION', '🔥')}&lt;/h1&gt;
+&lt;p&gt;Druid: {DRUID_HOST}:{DRUID_PORT}&lt;/p&gt;
+&lt;p&gt;Build: {os.getenv('BUILD_URL', '')}&lt;/p&gt;'''
+            self.wfile.write(html.encode())
+            requests_total.labels(method='GET', path=self.path, status=200).inc()
+        active_requests.dec()
+
+# Запуск: HTTP на 8080, метрики на 8000
+start_http_server(8000)
+server = http.server.HTTPServer(('0.0.0.0', 8080), Handler)
+server.serve_forever()</pre>
+
+<p><b>Что делает:</b></p>
+<ul>
+<li>Слушает порт <b>8080</b> — возвращает HTML страницу</li>
+<li>Слушает порт <b>8000</b> — возвращает Prometheus метрики в формате text/plain</li>
+<li>Собирает метрики: requests_total (счётчик), active_requests (датчик), app_info (инфо)</li>
+<li>Читает переменные окружения: DRUID_HOST, DRUID_PORT, APP_VERSION, BUILD_URL</li>
+</ul>
+
+<h3>2.2 Dockerfile — образ контейнера</h3>
+<pre>FROM python:3.9-slim
+RUN pip install --target=/tmp/p prometheus_client
+COPY calc.py /tmp/calc.py
+COPY test_app.py /tmp/test_app.py
+ENV PYTHONPATH=/tmp/p
+CMD ["python3", "/tmp/calc.py"]</pre>
+
+<p><b>Что делает:</b></p>
+<ul>
+<li>Берёт официальный образ python:3.9-slim (легковесный, ~120MB)</li>
+<li>Устанавливает prometheus_client в /tmp/p (чтобы не смешивать с системными пакетами)</li>
+<li>Копирует calc.py и test_app.py в /tmp/</li>
+<li>При запуске выполняет calc.py</li>
+<li>Т.к. в OpenShift образ собирается через BuildConfig, файлы копируются из репозитория</li>
+</ul>
+
+<h3>2.3 test_app.py — автоматические тесты</h3>
+<pre>import unittest, sys, os, tempfile
+
+class TestCalcApp(unittest.TestCase):
+    def test_imports(self):
+        # Проверяем, что calc.py импортируется без ошибок
+        sys.path.insert(0, '/tmp/p')
+        import calc
+        self.assertTrue(hasattr(calc, 'Handler'))
+
+    def test_version(self):
+        import calc
+        self.assertIsNotNone(calc.DRUID_HOST)
+
+if __name__ == '__main__':
+    unittest.main()</pre>
+
+<p><b>Что делает:</b> Проверяет, что calc.py импортируется корректно, переменные окружения читаются.
+При падении тестов Jenkins останавливает pipeline на этапе Test.</p>
+
+<h3>2.4 requirements.txt</h3>
+<pre>prometheus_client</pre>
+<p>Единственная зависимость — библиотека для Prometheus метрик.</p>
+
+<h3>2.5 Jenkinsfile — CI/CD пайплайн</h3>
+<pre>pipeline {
+    agent any
+    options {
+        buildDiscarder(logRotator(numToKeepStr: "10"))  // хранить 10 последних сборок
+        timeout(time: 1, unit: "HOURS")                  // таймаут пайплайна 1 час
+        timestamps()                                      // показывать время в логах
+    }
+    environment {
+        OPENSHIFT_API = 'https://api.rm3.7wse.p1.openshiftapps.com:6443'
+        OS_TOKEN = credentials('openshift-token')    // ID в Jenkins Credentials
+        NAMESPACE = 'kovaliov2700-dev'
+        APP_NAME = 'sber-monitoring'
+        APP_VERSION = "${BUILD_NUMBER}"              // номер сборки Jenkins
+        IMAGE = "image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/${APP_NAME}:${BUILD_NUMBER}"
+    }
+    stages {
+        stage('Checkout') {
+            steps { checkout scm }                   // клонировать Git репозиторий
+        }
+        stage('Test') {
+            steps {
+                sh 'python3 -m venv venv'
+                sh '. venv/bin/activate && pip install -r requirements.txt'
+                sh '. venv/bin/activate && python test_app.py'
+            }
+        }
+        stage('Login OpenShift') {
+            steps {
+                sh """
+                    oc login --token=${OS_TOKEN} --server=${OPENSHIFT_API} --insecure-skip-tls-verify=true
+                    oc project ${NAMESPACE}
+                """
+            }
+        }
+        stage('Apply K8s Core') {
+            steps {
+                sh """
+                    oc apply -f k8s/deployment.yaml -n ${NAMESPACE}
+                    oc apply -f k8s/service.yaml -n ${NAMESPACE}
+                    oc apply -f k8s/route.yaml -n ${NAMESPACE}
+                """
+            }
+        }
+        stage('Apply Monitoring') {
+            steps {
+                sh """
+                    oc apply -f k8s/servicemonitor.yaml -n ${NAMESPACE}
+                    oc apply -f k8s/prometheusrule.yaml -n ${NAMESPACE}
+                    oc apply -f k8s/prometheus.yaml -n ${NAMESPACE}
+                    oc apply -f k8s/grafana/configmap.yaml -n ${NAMESPACE}
+                    oc apply -f k8s/grafana/deployment.yaml -n ${NAMESPACE}
+                    oc apply -f k8s/grafana/service.yaml -n ${NAMESPACE}
+                    oc apply -f k8s/grafana/route.yaml -n ${NAMESPACE}
+                """
+            }
+        }
+        stage('Build Image') {
+            steps {
+                script {
+                    sh """
+                        oc new-build --name=${APP_NAME} --binary --strategy=docker -n ${NAMESPACE} || true
+                        oc start-build ${APP_NAME} --from-dir=. --wait -n ${NAMESPACE}
+                        oc tag ${NAMESPACE}/${APP_NAME}:latest ${NAMESPACE}/${APP_NAME}:${BUILD_NUMBER} -n ${NAMESPACE}
+                    """
+                }
+            }
+        }
+        stage('Deploy to TEST') {
+            steps {
+                sh """
+                    oc set image deployment/${APP_NAME}-test app=${IMAGE} -n ${NAMESPACE}
+                    oc set env deployment/${APP_NAME}-test APP_VERSION=${APP_VERSION} BUILD_URL=${BUILD_URL} -n ${NAMESPACE}
+                    oc scale deployment/${APP_NAME}-test --replicas=1 -n ${NAMESPACE}
+                """
+            }
+        }
+        stage('Approve PROD') {
+            options { timeout(time: 1, unit: "DAYS") }
+            steps {
+                input message: "Deploy build #${BUILD_NUMBER} to PROD?", ok: "Yes, deploy!"
+            }
+        }
+        stage('Deploy to PROD') {
+            steps {
+                sh """
+                    oc set image deployment/${APP_NAME}-prod app=${IMAGE} -n ${NAMESPACE}
+                    oc set env deployment/${APP_NAME}-prod APP_VERSION=${APP_VERSION} BUILD_URL=${BUILD_URL} -n ${NAMESPACE}
+                    oc scale deployment/${APP_NAME}-prod --replicas=2 -n ${NAMESPACE}
+                """
+            }
+        }
+    }
+    post {
+        success { echo "=== SUCCESS: Build #${BUILD_NUMBER} deployed ===" }
+        failure { echo "=== FAILED: Build #${BUILD_NUMBER} ===" }
+    }
+}</pre>
+
+<p><b>Детальный разбор Jenkinsfile:</b></p>
+<table>
+<tr><th>Строка</th><th>Что делает</th><th>Почему это важно</th></tr>
+<tr><td><code>agent any</code></td><td>Любой доступный Jenkins агент</td><td>Может быть Kubernetes pod или обычный сервер</td></tr>
+<tr><td><code>buildDiscarder</code></td><td>Хранит 10 последних сборок</td><td>Экономит место на диске Jenkins</td></tr>
+<tr><td><code>OS_TOKEN = credentials('openshift-token')</code></td><td>Читает токен из Jenkins Credentials</td><td>Безопасно: токен не виден в логах, маскируется звёздочками</td></tr>
+<tr><td><code>IMAGE = "image-registry.../${APP_NAME}:${BUILD_NUMBER}"</code></td><td>Формирует полное имя образа</td><td>Каждая сборка получает уникальный тег (номер сборки)</td></tr>
+<tr><td><code>checkout scm</code></td><td>Клонирует Git репозиторий</td><td>Jenkins сам знает URL из настроек pipeline</td></tr>
+<tr><td><code>python -m venv venv</code></td><td>Создаёт виртуальное окружение</td><td>Изолирует зависимости тестов от системы</td></tr>
+<tr><td><code>oc login --token=... --server=...</code></td><td>Вход в OpenShift</td><td>Без этого шага все oc команды не будут авторизованы</td></tr>
+<tr><td><code>oc apply -f k8s/deployment.yaml</code></td><td>Применяет манифесты</td><td>Создаёт/обновляет ресурсы в кластере</td></tr>
+<tr><td><code>oc new-build --binary --strategy=docker || true</code></td><td>Создаёт BuildConfig если его нет</td><td><code>|| true</code> — не падать, если BuildConfig уже существует</td></tr>
+<tr><td><code>oc start-build --from-dir=. --wait</code></td><td>Собирает Docker образ</td><td><code>--from-dir=.</code> — отправляет текущую папку как контекст сборки</td></tr>
+<tr><td><code>oc tag ...:latest ...:${BUILD_NUMBER}</code></td><td>Тегирует образ номером сборки</td><td>Позволяет откатиться к предыдущей версии</td></tr>
+<tr><td><code>oc set image deployment/...-test app=${IMAGE}</code></td><td>Обновляет образ в деплое</td><td>Без этой команды деплой продолжит использовать старый образ</td></tr>
+<tr><td><code>oc scale deployment/...-test --replicas=1</code></td><td>Масштабирует до 1 реплики</td><td>Включает TEST deployment (по умолчанию replicas=0)</td></tr>
+<tr><td><code>input message: "Deploy to PROD?"</code></td><td>Ждёт ручного подтверждения</td><td>Безопасность: ничто не идёт в PROD без одобрения</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2>3. Манифесты K8s — полный разбор каждого файла</h2>
+
+<h3>3.1 k8s/deployment.yaml</h3>
+<pre>---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sber-monitoring-test
+  namespace: kovaliov2700-dev
+  labels:
+    app: sber-monitoring-test
+spec:
+  replicas: 0                          # По умолчанию 0 — Jenkins масштабирует
+  selector:
+    matchLabels:
+      app: sber-monitoring-test        # Селектор должен совпадать с labels шаблона
+  template:
+    metadata:
+      labels:
+        app: sber-monitoring-test      # Этот label будет у подов
+    spec:
+      containers:
+      - name: app
+        image: python:3.9-slim
+        command:                       # Команда при запуске контейнера
+        - /bin/sh
+        - -c
+        - pip install --target=/tmp/p prometheus_client && PYTHONPATH=/tmp/p python3 -c "exec(__import__('urllib.request').request.urlopen('https://raw.githubusercontent.com/Stalker1301981-alt/sber-monitoring/main/calc.py').read())"
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 8000
+          name: metrics
+        env:
+        - name: DRUID_HOST
+          value: "druid-broker.infra.svc.cluster.local"
+        - name: DRUID_PORT
+          value: "8082"
+        - name: APP_VERSION
+          value: ""
+        - name: BUILD_URL
+          value: ""
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sber-monitoring-prod
+  namespace: kovaliov2700-dev
+  labels:
+    app: sber-monitoring-prod
+spec:
+  replicas: 0                          # Jenkins масштабирует до 2 при деплое в PROD
+  selector:
+    matchLabels:
+      app: sber-monitoring-prod
+  template:
+    metadata:
+      labels:
+        app: sber-monitoring-prod
+    spec:
+      containers:
+      - name: app
+        image: python:3.9-slim
+        command:
+        - /bin/sh
+        - -c
+        - pip install --target=/tmp/p prometheus_client && PYTHONPATH=/tmp/p python3 -c "exec(__import__('urllib.request').request.urlopen('https://raw.githubusercontent.com/Stalker1301981-alt/sber-monitoring/main/calc.py').read())"
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 8000
+          name: metrics
+        env:
+        - name: DRUID_HOST
+          value: "druid-broker.infra.svc.cluster.local"
+        - name: DRUID_PORT
+          value: "8082"
+        - name: APP_VERSION
+          value: ""
+        - name: BUILD_URL
+          value: ""</pre>
+
+<p><b>Ключевые моменты:</b></p>
+<ul>
+<li><b>replicas: 0</b> — деплой создан, но поды не запущены. Jenkins сам решает когда их включать</li>
+<li><b>command</b> — при запуске контейнера устанавливается prometheus_client и скачивается calc.py с GitHub. Это временное решение, пока Jenkins не соберёт образ</li>
+<li><b>containerPort: 8080 (http)</b> — порт для веб-трафика</li>
+<li><b>containerPort: 8000 (metrics)</b> — порт для Prometheus метрик</li>
+<li><b>DRUID_HOST/DRUID_PORT</b> — переменные окружения для подключения к Druid (аналитическая БД)</li>
+<li><b>APP_VERSION/BUILD_URL</b> — заполняются Jenkins при деплое</li>
+</ul>
+
+<h3>3.2 k8s/service.yaml</h3>
+<pre>apiVersion: v1
+kind: Service
+metadata:
+  name: sber-monitoring
+  namespace: kovaliov2700-dev
+  labels:
+    app: sber-monitoring-prod
+spec:
+  selector:
+    app: sber-monitoring-prod       # ← ВАЖНО: отправлять трафик к подам с этим label
+  ports:
+  - name: http
+    port: 8080                      # Порт сервиса
+    targetPort: 8080                # Порт контейнера (containerPort в deployment)
+  - name: metrics
+    port: 8000
+    targetPort: 8000
+  type: ClusterIP                   # Внутренний IP, не доступен из интернета</pre>
+
+<p><b>Как работает Service:</b></p>
+<ul>
+<li>Создаёт стабильный IP-адрес (ClusterIP) внутри кластера</li>
+<li>По selector <code>app: sber-monitoring-prod</code> находит все поды с таким label</li>
+<li>Балансирует трафик между подами (round-robin)</li>
+<li>Порт 8080 → трафик от Route или других сервисов</li>
+<li>Порт 8000 → Prometheus скрейпит метрики</li>
+</ul>
+
+<h3>3.3 k8s/route.yaml</h3>
+<pre>apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: sber-monitoring-route
+  namespace: kovaliov2700-dev
+spec:
+  to:
+    kind: Service
+    name: sber-monitoring            # → направляет трафик в Service
+  port:
+    targetPort: http                 # → на порт http (8080)
+  tls:
+    termination: edge                # TLS заканчивается на роутере (HTTPS → HTTP)
+  wildcardPolicy: None</pre>
+
+<p><b>Как работает Route:</b></p>
+<ul>
+<li>OpenShift Router (HAProxy) слушает внешние запросы</li>
+<li>Route создаёт DNS-имя: <code>sber-monitoring-route-kovaliov2700-dev.apps.rm3.7wse.p1.openshiftapps.com</code></li>
+<li><b>edge termination</b>: HTTPS трафик расшифровывается на роутере, до пода идёт HTTP</li>
+<li>Трафик: Браузер → HTTPS → Route → Service:8080 → Pod:8080</li>
+</ul>
+
+<h3>3.4 k8s/prometheus.yaml</h3>
+<pre>---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: kovaliov2700-dev
+data:
+  prometheus.yml: |               # Основной конфиг Prometheus
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    scrape_configs:
+    - job_name: sber-monitoring
+      static_configs:
+      - targets:
+        - sber-monitoring:8000    # ← скрейпим metrics порт сервиса
+        labels:
+          app: sber-monitoring-prod
+    - job_name: prometheus
+      static_configs:
+      - targets:
+        - localhost:9090
+    rule_files:
+    - /etc/prometheus/rules/*.yml
+  alerts.yml: |                   # Файл с правилами алертов
+    groups:
+    - name: sber-monitoring
+      rules:
+      - alert: AppDown
+        expr: up{job="sber-monitoring"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Sber-Monitoring PROD is down"
+      - alert: HighErrorRate
+        expr: rate(app_requests_total{job="sber-monitoring"}[5m]) > 100
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High request rate on Sber-Monitoring"
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: prometheus
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      serviceAccountName: prometheus
+      containers:
+      - name: prometheus
+        image: prom/prometheus:latest
+        args:
+        - --config.file=/etc/prometheus/prometheus.yml
+        - --storage.tsdb.path=/prometheus
+        - --web.enable-lifecycle
+        ports:
+        - containerPort: 9090
+          name: http
+        volumeMounts:
+        - name: config
+          mountPath: /etc/prometheus
+        - name: data
+          mountPath: /prometheus
+      volumes:
+      - name: config
+        configMap:
+          name: prometheus-config   # Монтируем ConfigMap как файл
+      - name: data
+        emptyDir: {}                # Временное хранилище для метрик
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+spec:
+  selector:
+    app: prometheus
+  ports:
+  - name: http
+    port: 9090
+    targetPort: 9090
+  type: ClusterIP
+
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: prometheus-route
+spec:
+  to:
+    kind: Service
+    name: prometheus
+  port:
+    targetPort: http
+  tls:
+    termination: edge</pre>
+
+<p><b>Почему standalone, а не Prometheus Operator CR?</b></p>
+<ul>
+<li>В DevSandbox нет прав на ClusterRole/ClusterRoleBinding — они нужны для Prometheus Operator</li>
+<li>Prometheus CR был создан, но оператор не среагировал (нет прав, нет StatefulSet)</li>
+<li>Standalone Prometheus через Deployment + ConfigMap работает без дополнительных прав</li>
+<li>ConfigMap монтируется как файл <code>/etc/prometheus/prometheus.yml</code></li>
+<li>Prometheus скрейпит <code>sber-monitoring:8000</code> — это metrics порт Service</li>
+<li>Rules загружаются из <code>/etc/prometheus/rules/alerts.yml</code></li>
+</ul>
+
+<h3>3.5 k8s/grafana/ — четыре файла</h3>
+
+<p><b>configmap.yaml:</b></p>
+<pre>apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-config
+data:
+  grafana.ini: |                    # Конфиг Grafana
+    [server]
+    root_url = https://grafana-route-...
+    [auth.anonymous]
+    enabled = true
+    org_role = Viewer
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources         # Datasource provisioning
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+    - name: Prometheus
+      type: prometheus
+      url: http://prometheus:9090    # ← Подключаемся к Prometheus по имени Service
+      access: proxy
+      isDefault: true
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-sber-monitoring  # Dashboard provisioning
+  labels:
+    grafana_dashboard: "true"
+data:
+  sber-monitoring-dashboard.json: |
+    { "title": "Sber Monitoring", "panels": [...] }</pre>
+
+<p><b>deployment.yaml, service.yaml, route.yaml:</b> — стандартные манифесты, аналогичные Prometheus.
+Grafana использует образ <code>grafana/grafana:latest</code>, порт 3000, admin/admin123.</p>
+
+<p><b>Provisioning (автонастройка):</b>
+Grafana умеет загружать датасорсы и дашборды из файлов при старте через механизм <b>provisioning</b>.
+Мы монтируем ConfigMap'ы в папки:</p>
+<ul>
+<li><code>/etc/grafana/provisioning/datasources/</code> → datasources.yaml</li>
+<li><code>/etc/grafana/provisioning/dashboards/</code> → dashboard JSON</li>
+</ul>
+
+<!-- ================================================================ -->
+<h2>4. Как создавать Pipeline в Jenkins — пошаговая инструкция</h2>
+
+<h3>4.1 Вход в Jenkins</h3>
+<ol>
+<li>Открыть браузер: <a href="https://jenkins-kovaliov2700-dev.apps.rm3.7wse.p1.openshiftapps.com">https://jenkins-kovaliov2700-dev.apps.rm3.7wse.p1.openshiftapps.com</a></li>
+<li>Нажать <b>"Log in with OpenShift"</b></li>
+<li>Ввести логин: <b>kovaliov2700</b> и пароль от DevSandbox</li>
+<li>Должны попасть на главную Jenkins</li>
+</ol>
+<div class="warn"><b>Важно:</b> Если Jenkins не открывается (502/503) — подождите 2-3 минуты, он всё ещё стартует.
+Проверьте: <code>oc get pods -l name=jenkins</code> — должен быть Running.</div>
+
+<h3>4.2 Создание Pipeline</h3>
+<ol>
+<li>Нажать <b>"New Item"</b> (слева в меню)</li>
+<li>Ввести имя: <code>sber-monitoring</code></li>
+<li>Выбрать <b>"Pipeline"</b></li>
+<li>Нажать <b>"OK"</b></li>
+</ol>
+
+<h3>4.3 Настройка Pipeline</h3>
+<ol>
+<li>В разделе <b>"Pipeline"</b>:</li>
+<ul>
+<li>Definition: выберите <b>"Pipeline script from SCM"</b></li>
+<li>SCM: выберите <b>"Git"</b></li>
+<li>Repository URL: <code>https://github.com/Stalker1301981-alt/sber-monitoring.git</code></li>
+<li>Credentials: нажмите <b>"Add" → "Jenkins"</b></li>
+<li>Kind: <b>"Username with password"</b></li>
+<li>Username: <code>Stalker1301981-alt</code></li>
+<li>Password: <code>[GITHUB_TOKEN_PLACEHOLDER]</code></li>
+<li>ID: <code>github-token</code></li>
+<li>Нажать <b>"Add"</b></li>
+<li>Выбрать только что созданный credentials</li>
+<li>Branches to build: <code>*/main</code></li>
+<li>Script Path: <code>Jenkinsfile</code> (этот файл в корне репозитория)</li>
+</ul>
+<li>Нажать <b>"Save"</b></li>
+</ol>
+
+<h3>4.4 Добавление OpenShift токена в Jenkins Credentials</h3>
+<ol>
+<li>Jenkins → Dashboard → <b>"Manage Jenkins"</b> → <b>"Credentials"</b></li>
+<li>Нажать на <b>"System"</b> (в таблице)</li>
+<li>Нажать <b>"Global credentials (unrestricted)"</b></li>
+<li>Нажать <b>"Add Credentials"</b></li>
+<li>Kind: <b>"Username with password"</b></li>
+<li>Username: <code>kovaliov2700</code></li>
+<li>Password: <code>[OPENSHIFT_TOKEN_PLACEHOLDER]</code></li>
+<li>ID: <code>openshift-token</code></li>
+<li>Description: <code>OpenShift token for kovaliov2700</code></li>
+<li>Нажать <b>"OK"</b></li>
+</ol>
+
+<div class="ok"><b>Готово!</b> Теперь можно запускать pipeline.</div>
+
+<h3>4.5 Запуск Pipeline</h3>
+<ol>
+<li>Открыть pipeline <b>sber-monitoring</b></li>
+<li>Нажать <b>"Build Now"</b> (слева)</li>
+<li>Смотреть лог: нажать на номер сборки (#1) → <b>"Console Output"</b></li>
+<li>Pipeline пройдёт все этапы, остановится на <b>"Approve PROD"</b> и будет ждать</li>
+<li>Когда будете готовы — нажать <b>"Yes, deploy!"</b></li>
+</ol>
+
+<p><b>Как выглядит Console Output:</b></p>
+<pre>Started by user kovaliov2700
+[Pipeline] stage (Checkout)
+[Pipeline] checkout
+ > git clone https://github.com/Stalker1301981-alt/sber-monitoring.git
+[Pipeline] stage (Test)
+[Pipeline] sh
++ python3 -m venv venv
++ pip install -r requirements.txt
++ python test_app.py
+...
+OK
+
+[Pipeline] stage (Login OpenShift)
+[Pipeline] sh
++ oc login --token=**** --server=https://api.rm3.7wse.p1.openshiftapps.com:6443
+Logged into "..." as "kovaliov2700"
+
+[Pipeline] stage (Build Image)
+[Pipeline] sh
++ oc start-build sber-monitoring --from-dir=. --wait
+Uploading directory "." as binary input for the build ...
+Build successful!
+
+[Pipeline] stage (Deploy to TEST)
+[Pipeline] sh
++ oc set image deployment/sber-monitoring-test app=image-registry.../sber-monitoring:1
++ oc scale deployment/sber-monitoring-test --replicas=1
+deployment.apps/sber-monitoring-test scaled
+
+[Pipeline] stage (Approve PROD)
+[Pipeline] input
+Deploy build #1 to PROD?
+Yes, deploy!
+
+[Pipeline] stage (Deploy to PROD)
+[Pipeline] sh
++ oc set image deployment/sber-monitoring-prod app=image-registry.../sber-monitoring:1
++ oc scale deployment/sber-monitoring-prod --replicas=2
+deployment.apps/sber-monitoring-prod scaled
+
+[Pipeline] End of Pipeline
+SUCCESS: Build #1 deployed</pre>
+
+<h3>4.6 Настройка GitHub Webhook (автоматический запуск)</h3>
+<p>Чтобы pipeline запускался автоматически при git push:</p>
+<ol>
+<li>Зайти на GitHub → <code>sber-monitoring</code> → <b>Settings</b> → <b>Webhooks</b></li>
+<li>Нажать <b>"Add webhook"</b></li>
+<li>Payload URL: <code>https://jenkins-kovaliov2700-dev.apps.rm3.7wse.p1.openshiftapps.com/github-webhook/</code></li>
+<li>Content type: <code>application/json</code></li>
+<li>Secret: (оставить пустым)</li>
+<li>Which events: <b>"Just the push event"</b></li>
+<li>Active: ✅</li>
+<li>Нажать <b>"Add webhook"</b></li>
+</ol>
+
+<!-- ================================================================ -->
+<h2>5. Как создать Deployment, Pod, Route, Service, ConfigMap — шпаргалка</h2>
+
+<h3>5.1 Deployment</h3>
+<p><b>Самый простой способ создать деплой:</b></p>
+<pre>oc create deployment my-app --image=python:3.9-slim -n kovaliov2700-dev</pre>
+<p><b>Создать из YAML файла:</b></p>
+<pre>oc apply -f k8s/deployment.yaml -n kovaliov2700-dev</pre>
+<p><b>Экспорт существующего деплоя в YAML:</b></p>
+<pre>oc get deployment sber-monitoring-prod -n kovaliov2700-dev -o yaml > backup.yaml</pre>
+<p><b>Обновить образ в деплое:</b></p>
+<pre>oc set image deployment/sber-monitoring-prod app=python:3.9-slim -n kovaliov2700-dev
+# где "app" — имя контейнера в deployment.spec.template.spec.containers[0].name</pre>
+<p><b>Обновить переменные окружения:</b></p>
+<pre>oc set env deployment/sber-monitoring-prod APP_VERSION=1.0 BUILD_URL=http://jenkins/1 -n kovaliov2700-dev</pre>
+<p><b>Масштабировать:</b></p>
+<pre>oc scale deployment/sber-monitoring-prod --replicas=3 -n kovaliov2700-dev</pre>
+<p><b>Удалить:</b></p>
+<pre>oc delete deployment/sber-monitoring-prod -n kovaliov2700-dev</pre>
+<p><b>Посмотреть историю изменений:</b></p>
+<pre>oc rollout history deployment/sber-monitoring-prod -n kovaliov2700-dev</pre>
+<p><b>Откатить к предыдущей версии:</b></p>
+<pre>oc rollout undo deployment/sber-monitoring-prod -n kovaliov2700-dev</pre>
+
+<h3>5.2 Pod</h3>
+<p><b>Список подов:</b></p>
+<pre>oc get pods -n kovaliov2700-dev
+oc get pods -n kovaliov2700-dev -o wide        # Показать IP и ноду
+oc get pods -n kovaliov2700-dev --watch         # Обновлять в реальном времени</pre>
+<p><b>Логи пода:</b></p>
+<pre>oc logs &lt;pod-name&gt; -n kovaliov2700-dev
+oc logs &lt;pod-name&gt; -n kovaliov2700-dev --tail=50    # Последние 50 строк
+oc logs -f &lt;pod-name&gt; -n kovaliov2700-dev           # Следить за логами (Ctrl+C выход)</pre>
+<p><b>Выполнить команду внутри пода:</b></p>
+<pre>oc exec -it &lt;pod-name&gt; -n kovaliov2700-dev -- /bin/sh
+# Внутри пода можно:
+#   ls -la
+#   env
+#   curl localhost:8080
+#   curl localhost:8000/metrics</pre>
+<p><b>Удалить под:</b></p>
+<pre>oc delete pod &lt;pod-name&gt; -n kovaliov2700-dev
+# Если под создан Deployment'ом — он пересоздастся автоматически</pre>
+<p><b>Описание пода (подробно):</b></p>
+<pre>oc describe pod &lt;pod-name&gt; -n kovaliov2700-dev</pre>
+
+<h3>5.3 Service</h3>
+<p><b>Список сервисов:</b></p>
+<pre>oc get service -n kovaliov2700-dev
+oc get svc -n kovaliov2700-dev                   # сокращение</pre>
+<p><b>Создать из YAML:</b></p>
+<pre>oc apply -f k8s/service.yaml -n kovaliov2700-dev</pre>
+<p><b>Создать через командную строку (экспоз деплоя):</b></p>
+<pre>oc expose deployment sber-monitoring-prod --port=8080 --target-port=8080 --name=sber-monitoring -n kovaliov2700-dev
+oc expose deployment sber-monitoring-prod --port=8000 --target-port=8000 --name=sber-monitoring-metrics -n kovaliov2700-dev</pre>
+<p><b>Удалить:</b></p>
+<pre>oc delete service/sber-monitoring -n kovaliov2700-dev</pre>
+<p><b>Проверить, доставляется ли трафик до подов:</b></p>
+<pre># Запустить временный под и проверить:
+oc run test-pod --image=curlimages/curl -n kovaliov2700-dev --rm -it --restart=Never -- curl -s http://sber-monitoring:8080</pre>
+
+<h3>5.4 Route</h3>
+<p><b>Список роутов:</b></p>
+<pre>oc get route -n kovaliov2700-dev</pre>
+<p><b>Создать Route из Service:</b></p>
+<pre>oc create route edge --service=sber-monitoring --port=http -n kovaliov2700-dev</pre>
+<p><b>Создать из YAML:</b></p>
+<pre>oc apply -f k8s/route.yaml -n kovaliov2700-dev</pre>
+<p><b>Получить полный URL роута:</b></p>
+<pre>oc get route sber-monitoring-route -n kovaliov2700-dev -o jsonpath="https://{.spec.host}"</pre>
+<p><b>Удалить:</b></p>
+<pre>oc delete route/sber-monitoring-route -n kovaliov2700-dev</pre>
+<p><b>Типы TLS termination:</b></p>
+<ul>
+<li><b>edge</b> — HTTPS заканчивается на роутере, до пода HTTP (мы используем этот)</li>
+<li><b>passthrough</b> — HTTPS идёт напрямую до пода (пода должен уметь HTTPS)</li>
+<li><b>reencrypt</b> — HTTPS до роутера, потом новый HTTPS до пода</li>
+</ul>
+
+<h3>5.5 ConfigMap</h3>
+<p><b>Список:</b></p>
+<pre>oc get configmap -n kovaliov2700-dev</pre>
+<p><b>Создать из YAML:</b></p>
+<pre>oc apply -f k8s/grafana/configmap.yaml -n kovaliov2700-dev</pre>
+<p><b>Создать из literal (быстро):</b></p>
+<pre>oc create configmap my-config --from-literal=key1=value1 --from-literal=key2=value2 -n kovaliov2700-dev</pre>
+<p><b>Создать из файла:</b></p>
+<pre>oc create configmap my-config --from-file=config.json -n kovaliov2700-dev</pre>
+<p><b>Посмотреть содержимое:</b></p>
+<pre>oc get configmap prometheus-config -n kovaliov2700-dev -o yaml</pre>
+<p><b>Удалить:</b></p>
+<pre>oc delete configmap/prometheus-config -n kovaliov2700-dev</pre>
+
+<h3>5.6 BuildConfig и ImageStream</h3>
+<p><b>Создать BuildConfig для Docker-сборки:</b></p>
+<pre>oc new-build --name=sber-monitoring --binary --strategy=docker -n kovaliov2700-dev</pre>
+<p><b>Запустить сборку:</b></p>
+<pre>oc start-build sber-monitoring --from-dir=. --wait -n kovaliov2700-dev
+# --from-dir=. — загрузить текущую папку как контекст
+# --wait — ждать завершения сборки</pre>
+<p><b>Посмотреть список сборок и их статус:</b></p>
+<pre>oc get build -n kovaliov2700-dev</pre>
+<p><b>Посмотреть логи сборки:</b></p>
+<pre>oc logs build/sber-monitoring-1 -n kovaliov2700-dev</pre>
+<p><b>ImageStream — где хранятся собранные образы:</b></p>
+<pre>oc get imagestream -n kovaliov2700-dev
+oc get imagestreamtag -n kovaliov2700-dev          # посмотреть теги</pre>
+<p><b>Добавить тег к образу:</b></p>
+<pre>oc tag kovaliov2700-dev/sber-monitoring:latest kovaliov2700-dev/sber-monitoring:my-tag -n kovaliov2700-dev</pre>
+<p><b>Полный путь к образу:</b></p>
+<pre>image-registry.openshift-image-registry.svc:5000/kovaliov2700-dev/sber-monitoring:latest</pre>
+
+<!-- ================================================================ -->
+<h2>6. Воспроизведение всего стека с нуля (на другом ПК)</h2>
+
+<p>Если нужно развернуть всё с нуля на новом компьютере — пошаговая инструкция:</p>
+
+<h3>6.1 Подготовка</h3>
+<pre># 1. Установить инструменты
+winget install --id RedHat.OpenShift-Client --exact
+winget install --id Git.Git -e
+winget install --id Docker.DockerDesktop -e
+
+# 2. Клонировать репозиторий
+git clone https://github.com/Stalker1301981-alt/sber-monitoring.git
+cd sber-monitoring
+
+# 3. Войти в OpenShift
+oc login --token=[OPENSHIFT_TOKEN_PLACEHOLDER] --server=https://api.rm3.7wse.p1.openshiftapps.com:6443 --insecure-skip-tls-verify=true
+oc project kovaliov2700-dev</pre>
+
+<h3>6.2 Проверить, что кластер пустой (или удалить всё)</h3>
+<pre># Посмотреть что есть:
+oc get all
+oc get route,configmap,servicemonitor,prometheusrule,pipeline,eventlistener
+
+# Если нужно очистить namespace (осторожно!):
+# oc delete all --all -n kovaliov2700-dev
+# oc delete configmap --all -n kovaliov2700-dev</pre>
+
+<h3>6.3 Развернуть приложение</h3>
+<pre># 1. Создать BuildConfig (для сборки образов)
+oc new-build --name=sber-monitoring --binary --strategy=docker -n kovaliov2700-dev
+
+# 2. Собрать образ из локальной папки
+oc start-build sber-monitoring --from-dir=. --wait -n kovaliov2700-dev
+
+# 3. Применить манифесты
+oc apply -f k8s/deployment.yaml -n kovaliov2700-dev
+oc apply -f k8s/service.yaml -n kovaliov2700-dev
+oc apply -f k8s/route.yaml -n kovaliov2700-dev
+
+# 4. Запустить поды
+oc scale deployment/sber-monitoring-test --replicas=1 -n kovaliov2700-dev
+oc scale deployment/sber-monitoring-prod --replicas=2 -n kovaliov2700-dev
+
+# 5. Проверить что всё работает
+oc get pods -n kovaliov2700-dev
+oc get route -n kovaliov2700-dev</pre>
+
+<h3>6.4 Развернуть мониторинг</h3>
+<pre># 1. Prometheus
+oc apply -f k8s/prometheus.yaml -n kovaliov2700-dev
+
+# 2. Grafana
+oc apply -f k8s/grafana/configmap.yaml -n kovaliov2700-dev
+oc apply -f k8s/grafana/deployment.yaml -n kovaliov2700-dev
+oc apply -f k8s/grafana/service.yaml -n kovaliov2700-dev
+oc apply -f k8s/grafana/route.yaml -n kovaliov2700-dev
+
+# 3 . Проверить
+oc get pods -n kovaliov2700-dev
+# Должны быть Running: prometheus, grafana, sber-monitoring-test, sber-monitoring-prod (x2)</pre>
+
+<h3>6.5 Развернуть Jenkins</h3>
+<pre># Jenkins через OpenShift Template
+oc new-app --template=openshift/jenkins-ephemeral -n kovaliov2700-dev -p MEMORY_LIMIT=2Gi -p ENABLE_OAUTH=true
+
+# Подождать 2-3 минуты пока Jenkins запустится
+oc get pods -n kovaliov2700-dev -l name=jenkins
+# Статус должен стать Running (1/1)
+
+# Получить URL Jenkins
+oc get route jenkins -n kovaliov2700-dev -o jsonpath="https://{.spec.host}"
+# Открыть в браузере, войти через OpenShift</pre>
+
+<h3>6.6 Настройка Jenkins (см. раздел 4)</h3>
+<p>После развёртывания Jenkins нужно:</p>
+<ol>
+<li>Создать pipeline "sber-monitoring" из SCM (GitHub)</li>
+<li>Добавить GitHub токен в Jenkins Credentials</li>
+<li>Добавить OpenShift токен в Jenkins Credentials</li>
+<li>Настроить GitHub Webhook для авто-запуска</li>
+</ol>
+
+<h3>6.7 Финальная проверка</h3>
+<pre># Открыть в браузере:
+# Sber-Monitoring: https://sber-monitoring-route-kovaliov2700-dev.apps.rm3.7wse.p1.openshiftapps.com
+# Prometheus:     https://prometheus-route-kovaliov2700-dev.apps.rm3.7wse.p1.openshiftapps.com
+# Grafana:        https://grafana-route-kovaliov2700-dev.apps.rm3.7wse.p1.openshiftapps.com (admin/admin123)
+# Jenkins:        https://jenkins-kovaliov2700-dev.apps.rm3.7wse.p1.openshiftapps.com
+
+# Запустить тестовый pipeline в Jenkins → Build Now</pre>
+
+<!-- ================================================================ -->
+<h2>7. Связи между компонентами — как всё работает вместе</h2>
+
+<table>
+<tr><th>Откуда</th><th>Куда</th><th>Как</th><th>Протокол</th><th>Порт</th></tr>
+<tr><td>Браузер</td><td>Route</td><td>HTTPS (интернет)</td><td>HTTPS</td><td>443</td></tr>
+<tr><td>Route</td><td>Service</td><td>Edge TLS расшифровка → HTTP</td><td>HTTP</td><td>8080</td></tr>
+<tr><td>Service</td><td>Pod (PROD)</td><td>По selector: app=sber-monitoring-prod</td><td>HTTP</td><td>8080</td></tr>
+<tr><td>Pod (calc.py)</td><td>Druid</td><td>Прямое подключение</td><td>HTTP</td><td>8082</td></tr>
+<tr><td>Prometheus</td><td>Service (metrics)</td><td>scrape_configs → sber-monitoring:8000</td><td>HTTP</td><td>8000</td></tr>
+<tr><td>Grafana</td><td>Prometheus</td><td>Datasource → http://prometheus:9090</td><td>HTTP</td><td>9090</td></tr>
+<tr><td>Jenkins</td><td>GitHub</td><td>SCM checkout + webhook</td><td>HTTPS</td><td>443</td></tr>
+<tr><td>Jenkins</td><td>OpenShift API</td><td>oc login + oc apply/set/scale</td><td>HTTPS</td><td>6443</td></tr>
+<tr><td>Jenkins</td><td>Internal Registry</td><td>oc start-build отдаёт файлы</td><td>HTTP(S)</td><td>5000</td></tr>
+<tr><td>OpenShift Build</td><td>Internal Registry</td><td>Сохраняет собранный образ</td><td>HTTP(S)</td><td>5000</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2>8. Типовые проблемы и их решение</h2>
+
+<table>
+<tr><th>Проблема</th><th>Симптом</th><th>Причина</th><th>Решение</th></tr>
+
+<tr>
+<td><b>Pod CrashLoopBackOff</b></td>
+<td>Pod перезапускается, статус CrashLoopBackOff</td>
+<td>Команда в контейнере завершается с ошибкой</td>
+<td><code>oc logs &lt;pod&gt; --tail=30</code> — смотреть последние строки ошибки.<br>
+Чаще всего: pip не может установить prometheus_client, или не может скачать calc.py (нет curl).<br>
+Решение: проверить command в deployment, установить curl или использовать python urllib.</td>
+</tr>
+
+<tr>
+<td><b>ImagePullBackOff</b></td>
+<td>Pod не стартует, статус ImagePullBackOff</td>
+<td>Образ не найден в registry</td>
+<td><code>oc describe pod &lt;pod&gt;</code> — смотреть событие Failed to pull image.<br>
+Решение: запустить <code>oc start-build sber-monitoring --from-dir=. --wait</code> чтобы собрать образ.</td>
+</tr>
+
+<tr>
+<td><b>Site not accessible</b></td>
+<td>Route открывается, но Connection Refused или 503</td>
+<td>Поды не Running, или Service selector не совпадает</td>
+<td><code>oc get pods</code> — проверить Running ли поды.<br>
+<code>oc describe service sber-monitoring</code> — проверить Endpoints (должны быть IP подов).<br>
+Если Endpoints пустые — selector не совпадает с labels подов.</td>
+</tr>
+
+<tr>
+<td><b>Jenkins 403</b></td>
+<td>Jenkins показывает 403 Forbidden</td>
+<td>OAuth проблема или CSRF</td>
+<td>Открыть в браузере, войти через "Log in with OpenShift".<br>
+Если не помогает — перезапустить Jenkins: <code>oc rollout restart deploymentconfig jenkins</code>.</td>
+</tr>
+
+<tr>
+<td><b>Jenkins pipeline fails on Test</b></td>
+<td>Этап Test падает с ошибкой</td>
+<td>test_app.py не может найти calc.py</td>
+<td>Проверить test_app.py: пути к файлам. Запустить локально <code>python test_app.py</code>.<br>
+Если нет python, установить: <code>winget install --id Python.Python.3.9</code>.</td>
+</tr>
+
+<tr>
+<td><b>Build fails</b></td>
+<td>oc start-build падает с ошибкой</td>
+<td>Dockerfile не найден или ошибка сборки</td>
+<td><code>oc logs build/sber-monitoring-1</code> — смотреть ошибку.<br>
+Проверить что Dockerfile есть в корне репозитория.</td>
+</tr>
+
+<tr>
+<td><b>Prometheus targets DOWN</b></td>
+<td>Prometheus UI показывает target DOWN</td>
+<td>Service sber-monitoring:8000 не отвечает</td>
+<td><code>oc get svc sber-monitoring</code> — провери что порт 8000 есть.<br>
+<code>oc exec &lt;pod&gt; -- curl localhost:8000/metrics</code> — проверить что под отдаёт метрики.</td>
+</tr>
+
+<tr>
+<td><b>Grafana "No data"</b></td>
+<td>Дашборды пустые</td>
+<td>Datasource URL неверный</td>
+<td>Grafana → Configuration → Data Sources → Prometheus → URL: <code>http://prometheus:9090</code>.<br>
+Нажать "Save & Test" — должно быть зелёное "Data source is working".</td>
+</tr>
+
+<tr>
+<td><b>403 on ServiceMonitor</b></td>
+<td>Cannot create ServiceMonitor</td>
+<td>Нет прав на мониторинг ресурсы</td>
+<td>Используем standalone Prometheus (k8s/prometheus.yaml), не Prometheus Operator.<br>
+ServiceMonitor и PrometheusRule не нужны — удалите их из Jenkinsfile если падает.</td>
+</tr>
+
+<tr>
+<td><b>oc login expired</b></td>
+<td>oc команды возвращают "forbidden"</td>
+<td>Токен истёк (DevSandbox токены живут ~24ч)</td>
+<td>Получить новый токен в OpenShift Console → ваш профиль → Copy login command.<br>
+Обновить в Jenkins Credentials.</td>
+</tr>
+
+<tr>
+<td><b>Pipeline stuck at Approve</b></td>
+<td>Pipeline висит на этапе Approve PROD</td>
+<td>Ждёт ручного подтверждения</td>
+<td>Открыть Jenkins → открыть сборку → Нажать "Yes, deploy!"</td>
+</tr>
+</table>
+
+<!-- ================================================================ -->
+<h2>9. Все URL (шпаргалка для быстрого доступа)</h2>
+
+<table>
+<tr><th>Сервис</th><th>URL</th><th>Логин</th><th>Пароль</th></tr>
+<tr><td><b>OpenShift Console</b></td><td>https://console.redhat.com/openshift</td><td>kovaliov2700</td><td>DevSandbox пароль</td></tr>
+<tr><td><b>Sber-Monitoring</b></td><td>https://sber-monitoring-route-kovaliov2700-dev.apps.rm3.7wse.p1.openshiftapps.com</td><td>—</td><td>— (публичный)</td></tr>
+<tr><td><b>Prometheus</b></td><td>https://prometheus-route-kovaliov2700-dev.apps.rm3.7wse.p1.openshiftapps.com</td><td>—</td><td>— (публичный)</td></tr>
+<tr><td><b>Grafana</b></td><td>https://grafana-route-kovaliov2700-dev.apps.rm3.7wse.p1.openshiftapps.com</td><td>admin</td><td>admin123</td></tr>
+<tr><td><b>Jenkins</b></td><td>https://jenkins-kovaliov2700-dev.apps.rm3.7wse.p1.openshiftapps.com</td><td colspan="2">Войти через OpenShift (OAuth)</td></tr>
+<tr><td><b>GitHub</b></td><td>https://github.com/Stalker1301981-alt/sber-monitoring</td><td>Stalker1301981-alt</td><td>[GITHUB_TOKEN_PLACEHOLDER]</td></tr>
+<tr><td><b>OpenShift API</b></td><td>https://api.rm3.7wse.p1.openshiftapps.com:6443</td><td>kovaliov2700</td><td>[OPENSHIFT_TOKEN_PLACEHOLDER]</td></tr>
+</table>
+
+<!-- ================================================================ -->
+<h2>10. Структура файлов проекта (полная)</h2>
+
+<pre>sber-monitoring/
+│
+├── calc.py                                  # HTTP сервер с Prometheus метриками
+│   ├── Порт 8080 — HTML страница
+│   ├── Порт 8000 — /metrics для Prometheus
+│   └── Метрики: app_requests_total, app_active_requests, app_info
+│
+├── Dockerfile                               # Сборка Docker образа
+│   ├── FROM python:3.9-slim
+│   ├── pip install prometheus_client
+│   ├── COPY calc.py /tmp/
+│   └── CMD ["python3", "/tmp/calc.py"]
+│
+├── Jenkinsfile                              # CI/CD pipeline
+│   ├── Checkout (Git clone)
+│   ├── Test (unittest)
+│   ├── Login OpenShift (oc login)
+│   ├── Apply K8s Core (deployment, service, route)
+│   ├── Apply Monitoring (prometheus, grafana)
+│   ├── Build Image (oc start-build)
+│   ├── Deploy to TEST (1 replica)
+│   ├── Approve PROD (manual input)
+│   └── Deploy to PROD (2 replicas)
+│
+├── test_app.py                              # Unit-тесты для calc.py
+│   └── Проверяет импорты, классы, переменные
+│
+├── requirements.txt                         # Зависимости Python
+│   └── prometheus_client
+│
+├── Sber-Monitoring_Stack_Guide.html         # Этот документ
+│
+└── k8s/                                     # Манифесты Kubernetes/OpenShift
+    │
+    ├── deployment.yaml                      # 2 Deployment: TEST (replicas:0) + PROD (replicas:0)
+    │   ├── image: python:3.9-slim
+    │   ├── command: pip install + python calc.py (скачивает с GitHub)
+    │   ├── ports: 8080 (http), 8000 (metrics)
+    │   └── env: DRUID_HOST, DRUID_PORT, APP_VERSION, BUILD_URL
+    │
+    ├── service.yaml                         # Service sber-monitoring (ClusterIP)
+    │   ├── selector: app=sber-monitoring-prod
+    │   └── ports: 8080, 8000
+    │
+    ├── route.yaml                           # Route sber-monitoring-route (edge TLS)
+    │   └── → Service sber-monitoring:8080
+    │
+    ├── prometheus.yaml                      # Standalone Prometheus
+    │   ├── ConfigMap: prometheus.yml + alerts.yml
+    │   ├── Deployment: prom/prometheus
+    │   ├── Service: prometheus:9090
+    │   └── Route: prometheus-route (edge TLS)
+    │
+    ├── servicemonitor.yaml                  # ServiceMonitor (для Prometheus Operator — не используется)
+    │
+    ├── prometheusrule.yaml                  # PrometheusRule (для Prometheus Operator — не используется)
+    │
+    ├── argocd-app.yaml                      # ArgoCD Application (для будущего — не используется)
+    │
+    └── grafana/                             # Grafana
+        ├── configmap.yaml                   # 3 ConfigMap: grafana.ini, datasources (→Prometheus), dashboard JSON
+        ├── deployment.yaml                  # Deployment: grafana/grafana:latest, admin/admin123
+        ├── service.yaml                     # Service: grafana:3000
+        └── route.yaml                       # Route: grafana-route (edge TLS)</pre>
+
+<!-- ================================================================ -->
+<h2>11. Шпаргалка: самые частые команды</h2>
+
+<table>
+<tr><th>Действие</th><th>Команда</th></tr>
+<tr><td>Список подов</td><td><code>oc get pods -n kovaliov2700-dev</code></td></tr>
+<tr><td>Логи пода</td><td><code>oc logs &lt;pod&gt; -n kovaliov2700-dev --tail=50</code></td></tr>
+<tr><td>Зайти в под</td><td><code>oc exec -it &lt;pod&gt; -n kovaliov2700-dev -- /bin/sh</code></td></tr>
+<tr><td>Список деплоев</td><td><code>oc get deployment -n kovaliov2700-dev</code></td></tr>
+<tr><td>Масштабировать</td><td><code>oc scale deployment/&lt;name&gt; --replicas=N -n kovaliov2700-dev</code></td></tr>
+<tr><td>Обновить образ</td><td><code>oc set image deployment/&lt;name&gt; app=&lt;image&gt; -n kovaliov2700-dev</code></td></tr>
+<tr><td>Список сервисов</td><td><code>oc get svc -n kovaliov2700-dev</code></td></tr>
+<tr><td>Список роутов</td><td><code>oc get route -n kovaliov2700-dev</code></td></tr>
+<tr><td>URL роута</td><td><code>oc get route &lt;name&gt; -n kovaliov2700-dev -o jsonpath="https://{.spec.host}"</code></td></tr>
+<tr><td>Применить манифест</td><td><code>oc apply -f &lt;file.yaml&gt; -n kovaliov2700-dev</code></td></tr>
+<tr><td>Удалить ресурс</td><td><code>oc delete &lt;type&gt;/&lt;name&gt; -n kovaliov2700-dev</code></td></tr>
+<tr><td>Собрать образ</td><td><code>oc start-build sber-monitoring --from-dir=. --wait -n kovaliov2700-dev</code></td></tr>
+<tr><td>Список сборок</td><td><code>oc get build -n kovaliov2700-dev</code></td></tr>
+<tr><td>Логи сборки</td><td><code>oc logs build/&lt;build-name&gt; -n kovaliov2700-dev</code></td></tr>
+<tr><td>Список ConfigMap</td><td><code>oc get configmap -n kovaliov2700-dev</code></td></tr>
+<tr><td>Список всех ресурсов</td><td><code>oc get all -n kovaliov2700-dev</code></td></tr>
+<tr><td>Роллбэк деплоя</td><td><code>oc rollout undo deployment/&lt;name&gt; -n kovaliov2700-dev</code></td></tr>
+<tr><td>История деплоя</td><td><code>oc rollout history deployment/&lt;name&gt; -n kovaliov2700-dev</code></td></tr>
+</table>
+
+<p style="text-align:center; color:#999; margin-top:50px; border-top:2px solid #CCC; padding-top:15px;">
+Sber-Monitoring Stack Guide — OpenShift DevSandbox — Июнь 2026<br>
+Репозиторий: https://github.com/Stalker1301981-alt/sber-monitoring
+</p>
+
+</body>
+</html>
