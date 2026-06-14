@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: grafana
-  namespace: kovaliov2700-dev
+  namespace: art2010901-dev
   labels:
     app: grafana
 spec:

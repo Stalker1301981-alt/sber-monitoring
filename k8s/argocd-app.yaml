@@ -11,7 +11,7 @@ spec:
     path: k8s
   destination:
     server: https://kubernetes.default.svc
-    namespace: kovaliov2700-dev
+    namespace: art2010901-dev
   syncPolicy:
     automated:
       prune: true

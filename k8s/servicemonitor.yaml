@@ -2,7 +2,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: sber-monitoring
-  namespace: kovaliov2700-dev
+  namespace: art2010901-dev
   labels:
     app: sber-monitoring
 spec:
@@ -15,4 +15,4 @@ spec:
     path: /metrics
   namespaceSelector:
     matchNames:
-    - kovaliov2700-dev
+    - art2010901-dev

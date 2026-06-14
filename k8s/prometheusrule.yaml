@@ -2,7 +2,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
   name: sber-monitoring-alerts
-  namespace: kovaliov2700-dev
+  namespace: art2010901-dev
   labels:
     app: sber-monitoring
 spec:
@@ -37,7 +37,7 @@ spec:
         description: "Test pod {{ $labels.pod }} has been down for more than 2 minutes."
 
     - alert: PodRestarts
-      expr: rate(kube_pod_container_status_restarts_total{namespace="kovaliov2700-dev"}[10m]) > 1
+      expr: rate(kube_pod_container_status_restarts_total{namespace="art2010901-dev"}[10m]) > 1
       for: 5m
       labels:
         severity: warning

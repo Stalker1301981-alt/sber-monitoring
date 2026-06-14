@@ -7,7 +7,7 @@ pipeline {
     }
     environment {
         OPENSHIFT_API = 'https://api.rm3.7wse.p1.openshiftapps.com:6443'
-        NAMESPACE = 'kovaliov2700-dev'
+        NAMESPACE = 'art2010901-dev'
         APP_NAME = 'sber-monitoring'
         APP_VERSION = "${BUILD_NUMBER}"
         IMAGE = "image-registry.openshift-image-registry.svc:5000/${NAMESPACE}/${APP_NAME}:${BUILD_NUMBER}"

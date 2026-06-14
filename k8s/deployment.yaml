@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sber-monitoring-test
-  namespace: kovaliov2700-dev
+  namespace: art2010901-dev
   labels:
     app: sber-monitoring-test
 spec:
@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
       - name: app
-        image: image-registry.openshift-image-registry.svc:5000/kovaliov2700-dev/sber-monitoring:latest
+        image: image-registry.openshift-image-registry.svc:5000/art2010901-dev/sber-monitoring:latest
         ports:
         - containerPort: 8080
           name: http
@@ -37,7 +37,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: sber-monitoring-prod
-  namespace: kovaliov2700-dev
+  namespace: art2010901-dev
   labels:
     app: sber-monitoring-prod
 spec:
@@ -52,7 +52,7 @@ spec:
     spec:
       containers:
       - name: app
-        image: image-registry.openshift-image-registry.svc:5000/kovaliov2700-dev/sber-monitoring:latest
+        image: image-registry.openshift-image-registry.svc:5000/art2010901-dev/sber-monitoring:latest
         ports:
         - containerPort: 8080
           name: http
