@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: grafana-config
+  name: grafana-all-in-one
   namespace: art2010901-dev
 data:
   grafana.ini: |
@@ -13,13 +13,6 @@ data:
     enabled = true
     org_role = Viewer
 
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: grafana-datasources
-  namespace: art2010901-dev
-data:
   datasources.yaml: |
     apiVersion: 1
     datasources:
@@ -29,15 +22,18 @@ data:
       access: proxy
       isDefault: true
 
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: grafana-dashboard-sber-monitoring
-  namespace: art2010901-dev
-  labels:
-    grafana_dashboard: "true"
-data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+    - name: SberMonitoring
+      orgId: 1
+      folder: ""
+      type: file
+      disableDeletion: false
+      editable: true
+      options:
+        path: /etc/grafana/provisioning/dashboards
+
   sber-monitoring-dashboard.json: |
     {
       "title": "Sber Monitoring",
