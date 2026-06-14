@@ -3,7 +3,6 @@ pipeline {
     options {
         buildDiscarder(logRotator(numToKeepStr: "10"))
         timeout(time: 1, unit: "HOURS")
-        // timestamps() - not supported in this Jenkins version
     }
     environment {
         OPENSHIFT_API = 'https://api.rm3.7wse.p1.openshiftapps.com:6443'
