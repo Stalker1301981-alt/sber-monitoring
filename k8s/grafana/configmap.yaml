@@ -73,6 +73,42 @@ data:
             {"color": "orange", "value": 80},
             {"color": "red", "value": 90}
           ]}
+        },
+        {
+          "title": "CPU Usage",
+          "type": "gauge",
+          "targets": [{"expr": "cpu_usage_percent", "legendFormat": "CPU %"}],
+          "gridPos": {"h": 6, "w": 6, "x": 6, "y": 16},
+          "options": {"min": 0, "max": 100, "thresholds": [
+            {"color": "green", "value": null},
+            {"color": "orange", "value": 80},
+            {"color": "red", "value": 90}
+          ]}
+        },
+        {
+          "title": "RAM Usage",
+          "type": "gauge",
+          "targets": [{"expr": "ram_usage_percent", "legendFormat": "RAM %"}],
+          "gridPos": {"h": 6, "w": 6, "x": 12, "y": 16},
+          "options": {"min": 0, "max": 100, "thresholds": [
+            {"color": "green", "value": null},
+            {"color": "orange", "value": 80},
+            {"color": "red", "value": 90}
+          ]}
+        },
+        {
+          "title": "Service Health",
+          "type": "stat",
+          "targets": [{"expr": "up{job=\"sber-monitoring\"}", "legendFormat": "up"}],
+          "gridPos": {"h": 6, "w": 6, "x": 18, "y": 16},
+          "options": {
+            "colorMode": "background",
+            "graphMode": "none",
+            "justifyMode": "auto",
+            "orientation": "auto",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "textMode": "auto"
+          }
         }
       ],
       "schemaVersion": 22,

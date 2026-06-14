@@ -57,6 +57,22 @@ data:
         annotations:
           summary: "Disk usage > 90%"
           description: "Root FS is {{ $value }}% full on pod {{ $labels.instance }}"
+      - alert: CPUHigh
+        expr: cpu_usage_percent > 80
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "CPU > 80%"
+          description: "CPU usage is {{ $value }}% on {{ $labels.instance }}"
+      - alert: RAMHigh
+        expr: ram_usage_percent > 80
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RAM > 80%"
+          description: "RAM usage is {{ $value }}% on {{ $labels.instance }}"
 
 ---
 apiVersion: v1

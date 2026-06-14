@@ -7,6 +7,8 @@ REQUESTS = Counter('app_requests_total', 'Total requests', ['method', 'path'])
 APP_INFO = Gauge('app_info', 'App version info', ['version'])
 ACTIVE_REQUESTS = Gauge('app_active_requests', 'Currently active requests')
 DISK = Gauge('disk_usage_percent', 'Disk usage % on root FS')
+CPU = Gauge('cpu_usage_percent', 'CPU usage percentage')
+RAM = Gauge('ram_usage_percent', 'RAM usage percentage')
 
 APP_VERSION = os.environ.get('APP_VERSION', '1')
 DRUID_HOST = os.environ.get('DRUID_HOST', 'druid-broker.infra.svc.cluster.local')
@@ -27,6 +29,8 @@ class SberMonitoringWebsite(BaseHTTPRequestHandler):
         html += '<p>Build: ' + BUILD_URL + '</p>'
         self.wfile.write(html.encode('utf-8'))
         DISK.set(psutil.disk_usage('/').percent)
+        CPU.set(psutil.cpu_percent())
+        RAM.set(psutil.virtual_memory().percent)
         ACTIVE_REQUESTS.dec()
 
 if __name__ == '__main__':
